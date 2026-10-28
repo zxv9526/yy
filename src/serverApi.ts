@@ -123,6 +123,7 @@ export async function executeTelegramUpdate(
   body: any,
   broadcast?: Function
 ): Promise<{
+  ok?: boolean;
   success: boolean;
   reply: string;
   command: string;
@@ -154,12 +155,14 @@ export async function executeTelegramUpdate(
     }
   }
 
-  // Support both direct simulator payload { command } and Telegram webhook update { message: { text } }
-  let rawText = body.command || body.message?.text || '';
+  // Support direct simulator payload { command }, Telegram messages, edits, channel posts, and callback queries
+  const messageObj = body.message || body.edited_message || body.channel_post || body.callback_query?.message;
+  let rawText = body.command || messageObj?.text || messageObj?.caption || body.callback_query?.data || '';
   const trimmed = rawText.trim();
 
-  const operator = body.operator || body.message?.from?.username || 'Telegram Bot Admin';
-  const senderKey = String(body.message?.chat?.id || body.message?.from?.id || body.operator || 'default_admin');
+  const operator = body.operator || body.message?.from?.username || body.callback_query?.from?.username || 'Telegram Bot Admin';
+  const chatId = messageObj?.chat?.id || body.callback_query?.from?.id;
+  const senderKey = String(chatId || body.message?.from?.id || body.operator || 'default_admin');
   const pending = adminPendingStates.get(senderKey);
   const isPendingValid = Boolean(pending && Date.now() - pending.timestamp < 600000);
   if (!isPendingValid && pending) {
@@ -431,7 +434,7 @@ export async function executeTelegramUpdate(
       let str = `📋 *茶楼授权白名单与管理员名册*:\n\n`;
       if (adminUsernames.length > 0) {
         str += `👑 *管理员 Telegram 用户名*:\n`;
-        for (const u of adminUsernames) str += `  • @${u}\n`;
+        for (const u of adminUsernames) str += `  • \`@${u}\`\n`;
       }
       if (adminPhones.length > 0) {
         str += `\n👑 *特权管理员账号* (${adminPhones.length} 个):\n`;
@@ -917,8 +920,7 @@ export async function executeTelegramUpdate(
       break;
   }
 
-  const chatId = body.message?.chat?.id;
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
 
   // Complete 6-Row ReplyKeyboardMarkup for Telegram Bot Admins
   const replyMarkup = {
@@ -937,7 +939,7 @@ export async function executeTelegramUpdate(
 
   if (chatId && botToken) {
     try {
-      fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      const sendRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -946,25 +948,36 @@ export async function executeTelegramUpdate(
           parse_mode: 'Markdown',
           reply_markup: replyMarkup,
         }),
-      }).catch(() => {});
-    } catch {}
+      });
+      const sendData = (await sendRes.json().catch(() => ({}))) as any;
+      if (!sendData?.ok) {
+        console.warn('⚠️ [Telegram Send Error]', sendData?.description);
+        // If Markdown formatting failed due to reserved characters like '_' in usernames, fallback to plain text
+        if (sendData?.description?.includes('entity') || sendData?.description?.includes('parse')) {
+          const plainText = reply.replace(/[*_`\[\]]/g, '');
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: plainText,
+              reply_markup: replyMarkup,
+            }),
+          }).catch(() => {});
+        }
+      }
+    } catch (err: any) {
+      console.error('⚠️ [Telegram Send Network Error]', err?.message || err);
+    }
   }
 
   return {
+    ok: true,
     success,
     reply,
     command: rawText,
     replyMarkup,
     timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-    ...(chatId
-      ? {
-          method: 'sendMessage',
-          chat_id: chatId,
-          text: reply,
-          parse_mode: 'Markdown',
-          reply_markup: replyMarkup,
-        }
-      : {}),
   };
 }
 
@@ -1834,9 +1847,11 @@ export async function handleApiRoute(
   if ((pathname === '/api/telegram/command' || pathname === '/api/telegram/webhook') && method === 'POST') {
     try {
       // If Telegram Webhook Secret Token is configured in .env, verify header
-      if (pathname === '/api/telegram/webhook' && process.env.TELEGRAM_WEBHOOK_SECRET) {
+      const rawSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim().replace(/^['"]+|['"]+$/g, '');
+      if (pathname === '/api/telegram/webhook' && rawSecret) {
         const secretHeader = req.headers ? req.headers['x-telegram-bot-api-secret-token'] : undefined;
-        if (secretHeader !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+        if (secretHeader !== rawSecret) {
+          console.warn('⚠️ [Telegram Webhook] Secret Token 不匹配:', { received: secretHeader, expected: rawSecret });
           sendJson(res, 403, { success: false, error: '非法请求：Telegram Webhook 密钥校验失败' });
           return true;
         }
@@ -1854,7 +1869,10 @@ export async function handleApiRoute(
   // 18. Telegram: Set Webhook Helper Endpoint
   if (pathname === '/api/telegram/set-webhook' && (method === 'POST' || method === 'GET')) {
     try {
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const { refreshEnvFromDisk, normalizePublicUrl, stopTelegramPolling, getTelegramWebhookInfo } = await import('./telegramBotService.ts');
+      refreshEnvFromDisk();
+
+      const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
       if (!token) {
         sendJson(res, 400, {
           success: false,
@@ -1865,41 +1883,50 @@ export async function handleApiRoute(
 
       const queryUrl = urlObj.searchParams.get('url');
       const body = method === 'POST' ? await parseJsonBody(req).catch(() => ({})) : {};
-      const targetAppUrl = queryUrl || body.url || process.env.URL || process.env.APP_URL || process.env.WEBHOOK_URL;
+      const targetAppUrl = normalizePublicUrl(queryUrl || body.url || process.env.URL || process.env.APP_URL || process.env.WEBHOOK_URL || '');
 
       if (!targetAppUrl || !targetAppUrl.startsWith('https://')) {
         sendJson(res, 400, {
           success: false,
-          error: '必须提供有效的 HTTPS 公网域名（Telegram Webhook 仅支持 HTTPS）',
-          currentAppUrl: targetAppUrl || '未配置',
+          error: '必须提供有效的 HTTPS 公网隧道域名（Telegram Webhook 仅支持 HTTPS，例如: https://xxx.trycloudflare.com）',
+          currentAppUrl: targetAppUrl || '未配置 (请在 .env 中设置 URL="https://...")',
         });
         return true;
       }
 
-      const cleanAppUrl = targetAppUrl.replace(/\/+$/, '');
-      const webhookUrl = `${cleanAppUrl}/api/telegram/webhook`;
+      const webhookUrl = `${targetAppUrl}/api/telegram/webhook`;
+      const dropPending = urlObj.searchParams.get('drop_pending') === 'true' || urlObj.searchParams.get('drop_pending_updates') === 'true';
 
-      const secretParam = process.env.TELEGRAM_WEBHOOK_SECRET
-        ? `&secret_token=${encodeURIComponent(process.env.TELEGRAM_WEBHOOK_SECRET)}`
+      const rawSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim().replace(/^['"]+|['"]+$/g, '');
+      const validSecret = /^[A-Za-z0-9_-]{1,256}$/.test(rawSecret) ? rawSecret : '';
+      const secretParam = validSecret
+        ? `&secret_token=${encodeURIComponent(validSecret)}`
         : '';
+
       const setWebhookUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(
         webhookUrl
-      )}${secretParam}&allowed_updates=${encodeURIComponent(JSON.stringify(['message', 'callback_query']))}`;
+      )}${secretParam}&drop_pending_updates=${dropPending}&allowed_updates=${encodeURIComponent(
+        JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query'])
+      )}`;
 
       const tgResp = await fetch(setWebhookUrl);
       const tgData = await tgResp.json();
 
       if (tgData && tgData.ok) {
-        try {
-          const { stopTelegramPolling } = await import('./telegramBotService.ts');
-          stopTelegramPolling();
-        } catch {}
+        stopTelegramPolling();
       }
+
+      const webhookInfo = await getTelegramWebhookInfo(token);
 
       sendJson(res, 200, {
         success: tgData.ok,
         telegramResponse: tgData,
         configuredWebhookUrl: webhookUrl,
+        realtimeWebhookInfo: webhookInfo,
+        status: tgData.ok ? 'registered_successfully' : 'registration_failed',
+        advice: tgData.ok
+          ? 'Webhook 已成功在 Telegram 官方服务器注册并生效！'
+          : `注册失败原因: ${tgData.description || '未知异常'}`,
       });
     } catch (e) {
       sendJson(res, 500, { success: false, error: String(e) });
@@ -1907,10 +1934,13 @@ export async function handleApiRoute(
     return true;
   }
 
-  // 19. Telegram: Get Webhook Info Helper Endpoint
+  // 19. Telegram: Get Webhook Info Helper Endpoint (深度诊断)
   if (pathname === '/api/telegram/webhook-info' && method === 'GET') {
     try {
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const { refreshEnvFromDisk, normalizePublicUrl } = await import('./telegramBotService.ts');
+      refreshEnvFromDisk();
+
+      const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
       if (!token) {
         sendJson(res, 400, {
           success: false,
@@ -1919,12 +1949,40 @@ export async function handleApiRoute(
         return true;
       }
 
+      const envRawUrl = (process.env.URL || process.env.APP_URL || process.env.WEBHOOK_URL || '').trim();
+      const normalizedEnvUrl = normalizePublicUrl(envRawUrl);
+      const expectedWebhookUrl = normalizedEnvUrl ? `${normalizedEnvUrl}/api/telegram/webhook` : '';
+
       const tgResp = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
       const tgData = await tgResp.json();
+      const info = tgData.result || {};
+
+      const isRegistered = Boolean(info.url && info.url.length > 0);
+      const isUrlMatched = expectedWebhookUrl ? (info.url === expectedWebhookUrl) : false;
+
+      let diagnosis = '正常';
+      if (!isRegistered) {
+        diagnosis = 'Telegram 官方未注册任何 Webhook 回调地址 (当前可能处于未注册状态或长轮询模式)';
+      } else if (!isUrlMatched) {
+        diagnosis = `URL 不匹配：Telegram 登记的地址为 [${info.url}]，而当前 .env 中配置的是 [${expectedWebhookUrl}]。请访问 /api/telegram/set-webhook 重新注册！`;
+      } else if (info.last_error_message) {
+        diagnosis = `Telegram 官方上报回调推送错误: "${info.last_error_message}"。若包含 502/Bad Gateway 说明隧道未连通本地 3000 端口；若包含 Connection timeout 说明隧道中断。`;
+      } else {
+        diagnosis = '🟢 Webhook 挂载状态完全正常，Telegram 官方可毫秒级直推消息！';
+      }
 
       sendJson(res, 200, {
         success: tgData.ok,
-        webhookInfo: tgData.result,
+        envUrl: envRawUrl,
+        normalizedEnvUrl,
+        expectedWebhookUrl,
+        registeredWebhookUrl: info.url || '未注册 (为空)',
+        isUrlMatched,
+        hasPendingUpdates: info.pending_update_count || 0,
+        lastErrorDate: info.last_error_date ? new Date(info.last_error_date * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : null,
+        lastErrorMessage: info.last_error_message || null,
+        diagnosis,
+        webhookInfo: info,
       });
     } catch (e) {
       sendJson(res, 500, { success: false, error: String(e) });

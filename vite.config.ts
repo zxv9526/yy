@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadDatabase, saveDatabase } from './src/serverStorage.ts';
 import { handleApiRoute } from './src/serverApi.ts';
+import { initTelegramBotService } from './src/telegramBotService.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,7 @@ const envCandidates = [
 
 for (const p of envCandidates) {
   if (fs.existsSync(p)) {
-    dotenv.config({ path: p });
+    dotenv.config({ path: p, override: true });
   }
 }
 
@@ -577,6 +578,19 @@ function chessWebSocketPlugin(): Plugin {
         }
         next();
       });
+
+      // Auto-schedule Telegram Bot Service in Vite development server
+      if (server.httpServer.listening) {
+        initTelegramBotService(broadcast).catch((err) => {
+          console.error('⚠️ [Vite Telegram Bot Init Error]', err);
+        });
+      } else {
+        server.httpServer.once('listening', () => {
+          initTelegramBotService(broadcast).catch((err) => {
+            console.error('⚠️ [Vite Telegram Bot Init Error]', err);
+          });
+        });
+      }
     },
   };
 }
