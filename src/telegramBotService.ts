@@ -9,6 +9,9 @@ export interface TelegramBotStatus {
   tokenConfigured: boolean;
   tokenMasked: string;
   urlConfigured: string;
+  apiBase?: string;
+  botUsername?: string;
+  botName?: string;
   webhookUrl?: string;
   pollingActive: boolean;
   lastPollTimestamp: number | null;
@@ -48,7 +51,16 @@ export function refreshEnvFromDisk(): void {
 
   for (const p of possibleEnvPaths) {
     if (fs.existsSync(p)) {
-      dotenv.config({ path: p, override: true });
+      try {
+        const content = fs.readFileSync(p, 'utf-8');
+        const parsed = dotenv.parse(content);
+        for (const [k, v] of Object.entries(parsed)) {
+          // 仅当 .env 中的值包含非空内容时才覆盖，防止 .env 模板中的空字符串意外抹除外部传入的有效变量
+          if (typeof v === 'string' && v.trim() !== '') {
+            process.env[k] = v.trim();
+          }
+        }
+      } catch {}
     }
   }
 }
@@ -67,15 +79,30 @@ export function getTelegramBotStatus(): TelegramBotStatus {
   return { ...botStatus };
 }
 
+/**
+ * 获取 Telegram API 端点：
+ * 优先采用用户配置的国内反代地址 (URL / TELEGRAM_API_BASE / TG_PROXY)，
+ * 若均未配置则使用官方 https://api.telegram.org
+ */
 export function getTelegramApiBase(): string {
   refreshEnvFromDisk();
-  const raw = (process.env.TELEGRAM_API_BASE || '').trim().replace(/^['"]+|['"]+$/g, '');
+  const raw = (
+    process.env.TELEGRAM_API_BASE ||
+    process.env.TG_PROXY ||
+    process.env.TG_API_BASE ||
+    process.env.URL ||
+    ''
+  ).trim().replace(/^['"]+|['"]+$/g, '');
+
   if (!raw) return 'https://api.telegram.org';
+
   let base = raw;
   if (!/^https?:\/\//i.test(base)) {
     base = 'https://' + base;
   }
-  return base.replace(/\/+$/, '');
+  // 过滤多余尾部斜杠与意外附加的 /bot 路径
+  base = base.replace(/\/+$/, '').replace(/\/bot$/i, '');
+  return base;
 }
 
 /**
@@ -85,7 +112,7 @@ export async function getTelegramWebhookInfo(token: string): Promise<any> {
   try {
     const apiBase = getTelegramApiBase();
     const res = await fetch(`${apiBase}/bot${token}/getWebhookInfo`, {
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
     const data = (await res.json()) as any;
     if (data && data.ok) {
@@ -94,13 +121,14 @@ export async function getTelegramWebhookInfo(token: string): Promise<any> {
     }
     return null;
   } catch (err: any) {
-    console.warn('⚠️ [Telegram Bot] 查询 getWebhookInfo 失败 (本地直连受限):', err?.message || err);
+    console.warn('⚠️ [Telegram Bot] 查询 getWebhookInfo 失败 (可能未配置反代或网络波动):', err?.message || err);
     return null;
   }
 }
 
 /**
  * 启动 Telegram 长轮询服务 (Long Polling)
+ * 通过反代 URL 直连 Telegram getUpdates，国内 Termux / 无代理服务器完美运行！
  */
 export async function startTelegramPolling(token: string, broadcast?: Function): Promise<void> {
   if (broadcast) savedBroadcast = broadcast;
@@ -119,20 +147,21 @@ export async function startTelegramPolling(token: string, broadcast?: Function):
   botStatus.pollingActive = true;
   botStatus.lastError = null;
 
+  const apiBase = getTelegramApiBase();
+
   try {
-    const apiBase = getTelegramApiBase();
     const delRes = await fetch(`${apiBase}/bot${token}/deleteWebhook?drop_pending_updates=false`, {
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
     const delData = (await delRes.json().catch(() => ({}))) as any;
     if (delData && delData.ok) {
-      console.log('🤖 [Telegram Bot] 已注销 Webhook，已切换为长轮询模式 (Long Polling)');
+      console.log('🤖 [Telegram Bot] 已注销旧 Webhook，已切换为长轮询模式 (Long Polling)');
     }
   } catch (err: any) {
-    console.warn('⚠️ [Telegram Bot] 清理 Webhook 时网络波动:', err?.message || err);
+    console.warn('⚠️ [Telegram Bot] 注销 Webhook 网络提示:', err?.message || err);
   }
 
-  console.log('🤖 [Telegram Bot] 🚀 长轮询已就绪，正在后台监听 Telegram 消息 (免公网/免域名)...');
+  console.log(`🤖 [Telegram Bot] 🚀 长轮询已就绪，正在后台监听 Telegram 消息 (反代: ${apiBase})...`);
 
   let offset = 0;
   let consecutiveErrors = 0;
@@ -141,13 +170,13 @@ export async function startTelegramPolling(token: string, broadcast?: Function):
     while (!controller.signal.aborted) {
       try {
         botStatus.lastPollTimestamp = Date.now();
-        const apiBase = getTelegramApiBase();
-        const fetchUrl = `${apiBase}/bot${token}/getUpdates?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent(
+        const currentApiBase = getTelegramApiBase();
+        const fetchUrl = `${currentApiBase}/bot${token}/getUpdates?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent(
           JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query'])
         )}`;
 
         const res = await fetch(fetchUrl, {
-          signal: AbortSignal.timeout(35000),
+          signal: AbortSignal.timeout(40000),
         });
 
         if (!res.ok) {
@@ -157,9 +186,8 @@ export async function startTelegramPolling(token: string, broadcast?: Function):
 
           if (res.status === 409) {
             console.warn('⚠️ [Telegram Bot] 检测到冲突 (409 Conflict)，正在重试清理 Webhook 并等待 5 秒...');
-            const apiBase = getTelegramApiBase();
-            await fetch(`${apiBase}/bot${token}/deleteWebhook?drop_pending_updates=false`, {
-              signal: AbortSignal.timeout(4000),
+            await fetch(`${currentApiBase}/bot${token}/deleteWebhook?drop_pending_updates=false`, {
+              signal: AbortSignal.timeout(8000),
             }).catch(() => {});
             await new Promise((r) => setTimeout(r, 5000));
             continue;
@@ -174,6 +202,9 @@ export async function startTelegramPolling(token: string, broadcast?: Function):
         const data = (await res.json()) as any;
 
         if (data && data.ok && Array.isArray(data.result)) {
+          if (data.result.length > 0) {
+            console.log(`📥 [Telegram Bot] 收到 ${data.result.length} 条更新，正在执行...`);
+          }
           for (const update of data.result) {
             if (controller.signal.aborted) break;
             offset = Math.max(offset, (update.update_id || 0) + 1);
@@ -220,13 +251,14 @@ export function stopTelegramPolling(): void {
 
 /**
  * 初始化并自动调度 Telegram Bot
- * - 当 .env 中配置了有效 HTTPS 的 URL 变量时 -> 优先 Webhook 模式 (支持隧道反向投递与免代理回复)
- * - 当 .env 中 URL 变量为空或未配置时 -> 自动以长轮询 (Long Polling) 模式启动
+ * - 用户配置的 URL 变量用作 Telegram 反代地址 (解决国内未挂代理直连报错 TypeError: fetch failed)
+ * - 默认自动以【长轮询模式 (Long Polling)】运行，无需域名、无需穿透，通过反代毫秒级收发消息！
+ * - 若显式指定 BOT_MODE=webhook 且配置了 WEBHOOK_URL，则切换为 Webhook 模式
  */
 export async function initTelegramBotService(broadcast?: Function): Promise<void> {
   if (broadcast) savedBroadcast = broadcast;
 
-  // 1. 动态刷新并强制加载最新的 .env 文件，防止运行时读取旧变量
+  // 1. 动态刷新并强制加载最新的 .env 文件
   refreshEnvFromDisk();
 
   const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
@@ -248,105 +280,88 @@ export async function initTelegramBotService(broadcast?: Function): Promise<void
     return;
   }
 
+  const apiBase = getTelegramApiBase();
+
   botStatus.tokenConfigured = true;
   botStatus.tokenMasked = maskToken(token);
   botStatus.enabled = true;
+  botStatus.apiBase = apiBase;
+  botStatus.urlConfigured = (process.env.URL || process.env.TELEGRAM_API_BASE || '').trim();
 
-  // 读取并规范化 URL 配置变量 (优先 URL，兼容 APP_URL 与 WEBHOOK_URL)
-  const rawUrl = (
-    process.env.URL ||
-    process.env.APP_URL ||
-    process.env.WEBHOOK_URL ||
-    ''
-  ).trim();
+  // 2. 向 Telegram 反代端点发送 getMe 探测连通性并获取 Bot 身份
+  try {
+    console.log(`🤖 [Telegram Bot] 正在连接 Telegram 反代端点 (${apiBase}) 验证 Bot 凭据...`);
+    const meRes = await fetch(`${apiBase}/bot${token}/getMe`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    const meData = (await meRes.json().catch(() => ({}))) as any;
+    if (meData && meData.ok && meData.result) {
+      const me = meData.result;
+      botStatus.botUsername = me.username;
+      botStatus.botName = me.first_name;
+      botStatus.lastError = null;
+      console.log(`✅ [Telegram Bot] 反代连接成功！机器人账号: @${me.username} (${me.first_name || '国粹棋牌'})`);
+      console.log(`   • Telegram API 反代端点: ${apiBase}`);
+    } else {
+      const desc = meData?.description || JSON.stringify(meData);
+      botStatus.lastError = `Telegram API 返回: ${desc}`;
+      console.warn(`⚠️ [Telegram Bot] getMe 验证未通过: ${desc}`);
+    }
+  } catch (err: any) {
+    botStatus.lastError = `连接 Telegram 反代端点异常 (${apiBase}): ${err?.message || err}`;
+    console.warn(`⚠️ [Telegram Bot] 连接 Telegram API 反代端点异常 (${apiBase}):`, err?.message || err);
+  }
 
-  const configuredUrl = normalizePublicUrl(rawUrl);
-  botStatus.urlConfigured = configuredUrl;
+  // 3. 确定运行模式：长轮询 (Long Polling) 还是 Webhook
+  const webhookExplicit = (process.env.WEBHOOK_URL || '').trim();
+  const botModeEnv = (process.env.BOT_MODE || '').trim().toLowerCase();
+  const isWebhookMode = botModeEnv === 'webhook' || (Boolean(webhookExplicit) && botModeEnv !== 'polling');
 
-  const isHttps = configuredUrl.startsWith('https://');
-  const forcePolling = process.env.BOT_MODE === 'polling';
-
-  if (isHttps && !forcePolling) {
-    // 方案 A: 配置了有效 HTTPS 域名 -> 启动 Webhook 模式
+  if (isWebhookMode && webhookExplicit) {
+    // 显式指定了 Webhook 模式和应用本身的穿透域名
+    const configuredWebhookHost = normalizePublicUrl(webhookExplicit);
+    const webhookUrl = `${configuredWebhookHost}/api/telegram/webhook`;
     botStatus.mode = 'webhook';
     botStatus.pollingActive = false;
-    const webhookUrl = `${configuredUrl}/api/telegram/webhook`;
     botStatus.webhookUrl = webhookUrl;
 
     const rawSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim().replace(/^['"]+|['"]+$/g, '');
     const validSecret = /^[A-Za-z0-9_-]{1,256}$/.test(rawSecret) ? rawSecret : '';
-    const secretParam = validSecret
-      ? `&secret_token=${encodeURIComponent(validSecret)}`
-      : '';
+    const secretParam = validSecret ? `&secret_token=${encodeURIComponent(validSecret)}` : '';
 
-    const officialSetWebhookUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(
-      webhookUrl
-    )}${secretParam}&drop_pending_updates=true&allowed_updates=${encodeURIComponent(
-      JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query'])
-    )}`;
-
-    const apiBase = getTelegramApiBase();
     const setWebhookUrl = `${apiBase}/bot${token}/setWebhook?url=${encodeURIComponent(
       webhookUrl
     )}${secretParam}&drop_pending_updates=true&allowed_updates=${encodeURIComponent(
       JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query'])
     )}`;
 
-    console.log(`🤖 [Telegram Bot] 检测到隧道公网 HTTPS 域名: ${configuredUrl}`);
-    console.log(`🤖 [Telegram Bot] 正在向 Telegram 注册 Webhook 回调地址: ${webhookUrl} ...`);
+    console.log(`🤖 [Telegram Bot] 检测到显式配置 Webhook 回调地址: ${webhookUrl}`);
+    console.log(`🤖 [Telegram Bot] 正在向 Telegram 注册 Webhook...`);
 
     try {
-      const res = await fetch(setWebhookUrl, {
-        signal: AbortSignal.timeout(4000),
-      });
+      const res = await fetch(setWebhookUrl, { signal: AbortSignal.timeout(8000) });
       const data = (await res.json().catch(() => ({}))) as any;
-
       if (data && data.ok) {
         botStatus.lastError = null;
-
-        console.log(`✅ [Telegram Bot] 恭喜！Telegram Webhook 注册成功！`);
-        console.log(`   • 官方回调入口: ${webhookUrl}`);
-        console.log(`   • 推送链路: Telegram -> 穿透隧道 -> 本地服务 (/api/telegram/webhook)`);
-
-        const info = await getTelegramWebhookInfo(token);
-        if (info) {
-          if (info.url === webhookUrl) {
-            console.log(`   • Telegram 服务器挂载状态: 🟢 已核实完全一致 (${info.url})`);
-          } else {
-            console.warn(`   • ⚠️ 提示：Telegram 当前登记的 URL 为: ${info.url}`);
-          }
-          if (info.last_error_message) {
-            console.warn(`   • ⚠️ 历史递送警告: Telegram 上次报错 [${info.last_error_message}]`);
-          }
-          if (typeof info.pending_update_count === 'number' && info.pending_update_count > 0) {
-            console.log(`   • 待处理排队消息: ${info.pending_update_count} 条，即将由 Webhook 毫秒级直推！`);
-          }
-        }
+        console.log(`✅ [Telegram Bot] Webhook 注册成功！`);
+        console.log(`   • 回调入口: ${webhookUrl}`);
         return;
       } else {
         const errorMsg = data?.description || JSON.stringify(data);
-        botStatus.lastError = `Webhook 官方返回: ${errorMsg}`;
-        console.warn(`⚠️ [Telegram Bot] Webhook 自动注册未通过:`, errorMsg);
-        console.log(`👉 解决方案：请在浏览器中打开官方链接完成一键激活: ${officialSetWebhookUrl}`);
+        botStatus.lastError = `Webhook 注册未通过: ${errorMsg}`;
+        console.warn(`⚠️ [Telegram Bot] Webhook 注册未通过:`, errorMsg);
+        console.log(`🚀 [Telegram Bot] 自动降级启动【长轮询模式 (Long Polling)】...`);
       }
     } catch (err: any) {
-      botStatus.lastError = '本地直连受限 (fetch failed)。已启用免代理 Webhook 模式，请在浏览器中完成一次性注册。';
-      console.warn(`⚠️ [Telegram Bot] 本地 Node 无法直连 api.telegram.org (国内服务器/Termux常见现象)。`);
-      console.log(`💡 [Telegram Bot 免代理全自动运行秘诀]:`);
-      console.log(`   Telegram Webhook 具备“免代理双向直通”机制！`);
-      console.log(`   您只需在手机浏览器或电脑（具备科学上网环境）中点击打开以下链接一次：`);
-      console.log(`   👉 官方一键激活直链: ${officialSetWebhookUrl}`);
-      console.log(`   👉 点击后 Telegram 将返回 {"ok":true}，之后即使手机完全不挂梯子，Telegram 也会通过隧道直推消息并由本地极速秒回！`);
+      botStatus.lastError = `Webhook 注册请求异常: ${err?.message || err}`;
+      console.warn(`⚠️ [Telegram Bot] Webhook 注册请求异常，降级启动长轮询:`, err?.message || err);
     }
-  } else {
-    // 方案 B: 未配置 URL 或 URL 非 HTTPS -> 自动启动长轮询
-    if (configuredUrl) {
-      console.log(`🤖 [Telegram Bot] URL 变量为非 HTTPS 地址 ('${configuredUrl}')，Telegram Webhook 仅支持 HTTPS。`);
-    } else {
-      console.log(`🤖 [Telegram Bot] .env 中未配置 URL 变量 (URL 为空)。`);
-    }
-    console.log(`🚀 [Telegram Bot] 自动启动【长轮询模式 (Long Polling)】！`);
-    console.log(`   优势：无需公网 IP、无需域名、无需端口映射，在手机 Termux 或内网均可直接接收 Bot 指令！`);
-    await startTelegramPolling(token, broadcast);
   }
+
+  // 默认启动长轮询模式 (Long Polling)
+  // 通过反代 URL 直连 Telegram getUpdates，国内 Termux / 无代理服务器完美运行！
+  console.log(`🚀 [Telegram Bot] 自动启动【长轮询模式 (Long Polling)】！`);
+  console.log(`   • Telegram 反代通道: ${apiBase}`);
+  console.log(`   • 运行优势: 国内网络免代理直连，无需穿透隧道与公网域名，全自动接收与响应管理指令！`);
+  await startTelegramPolling(token, broadcast);
 }

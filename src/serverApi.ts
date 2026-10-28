@@ -960,7 +960,7 @@ export async function executeTelegramUpdate(
           parse_mode: 'Markdown',
           reply_markup: replyMarkup,
         }),
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(10000),
       });
       const sendData = (await sendRes.json().catch(() => ({}))) as any;
       if (!sendData?.ok) {
@@ -975,13 +975,14 @@ export async function executeTelegramUpdate(
               text: plainText,
               reply_markup: replyMarkup,
             }),
-            signal: AbortSignal.timeout(3000),
+            signal: AbortSignal.timeout(10000),
           }).catch(() => {});
+        } else {
+          console.warn(`⚠️ [Telegram Bot] sendMessage 返回非 OK (${apiBase}):`, sendData?.description || sendData);
         }
       }
     } catch (err: any) {
-      // In Webhook mode, outbound network errors are common in environments without VPN/proxy.
-      // The Webhook synchronous HTTP response delivers the reply directly without needing outbound access.
+      console.warn(`⚠️ [Telegram Bot] 发送回复消息网络异常:`, err?.message || err);
     }
   }
 
@@ -2135,10 +2136,38 @@ export async function handleApiRoute(
   // 20. Telegram: Bot Status & Switch Endpoint (Webhook vs Long Polling)
   if (pathname === '/api/telegram/status' && method === 'GET') {
     try {
-      const { getTelegramBotStatus } = await import('./telegramBotService.ts');
+      const { getTelegramBotStatus, getTelegramApiBase } = await import('./telegramBotService.ts');
+      const apiBase = getTelegramApiBase();
+      const status = getTelegramBotStatus();
+
+      // 可选：携带 ?test=1 时发起一次实时的 getMe 测试反代连通性
+      let connectionTest: any = null;
+      if (urlObj.searchParams.get('test') === '1') {
+        const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
+        if (token) {
+          try {
+            const t0 = Date.now();
+            const meRes = await fetch(`${apiBase}/bot${token}/getMe`, { signal: AbortSignal.timeout(8000) });
+            const meData = await meRes.json().catch(() => ({}));
+            connectionTest = {
+              ok: meData?.ok || false,
+              latencyMs: Date.now() - t0,
+              data: meData,
+            };
+          } catch (tErr: any) {
+            connectionTest = {
+              ok: false,
+              error: tErr?.message || String(tErr),
+            };
+          }
+        }
+      }
+
       sendJson(res, 200, {
         success: true,
-        bot: getTelegramBotStatus(),
+        bot: status,
+        apiBase,
+        connectionTest,
       });
     } catch (e) {
       sendJson(res, 500, { success: false, error: String(e) });

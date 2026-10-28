@@ -18,7 +18,15 @@ const possibleEnvPaths = [
 
 for (const p of possibleEnvPaths) {
   if (fs.existsSync(p)) {
-    dotenv.config({ path: p, override: true });
+    try {
+      const content = fs.readFileSync(p, 'utf-8');
+      const parsed = dotenv.parse(content);
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string' && v.trim() !== '') {
+          process.env[k] = v.trim();
+        }
+      }
+    } catch {}
   }
 }
 
