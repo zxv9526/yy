@@ -1,0 +1,191 @@
+name: Build and Package Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '**.md'
+      - 'TERMUX_DEPLOY_GUIDE.md'
+      - 'GAME_FILES_DESCRIPTION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Accept Android SDK Licenses & Install Android 36 SDK
+        run: |
+          echo "Using Android SDK at: $ANDROID_HOME"
+          yes 2>/dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses 2>/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" 2>/dev/null || true
+
+      - name: Install NPM Dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Ensure Android Native Project and Gradlew Exist
+        run: |
+          mkdir -p android
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          
+          if [ ! -f "android/gradlew" ]; then
+            echo "android/gradlew not found in repository! Generating android platform via Capacitor..."
+            rm -rf android
+            npx cap add android
+            mkdir -p android
+            echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          fi
+
+          # Ensure SDK 36 is configured as required by Capacitor 8 (androidx.activity 1.11.0, androidx.core 1.17.0)
+          sed -i 's/compileSdkVersion = 35/compileSdkVersion = 36/g' android/variables.gradle 2>/dev/null || true
+          sed -i 's/targetSdkVersion = 35/targetSdkVersion = 36/g' android/variables.gradle 2>/dev/null || true
+
+          # Ensure release APK has debug signing so it can be installed on Android without manual keystore
+          if ! grep -q "signingConfig signingConfigs.debug" android/app/build.gradle 2>/dev/null; then
+            sed -i '/release {/a \            signingConfig signingConfigs.debug' android/app/build.gradle 2>/dev/null || true
+          fi
+
+          # Ensure Java 21 compatibility required by Capacitor 8
+          if ! grep -q "JavaVersion.VERSION_21" android/app/build.gradle 2>/dev/null; then
+            sed -i '/android {/a \    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_21\n        targetCompatibility JavaVersion.VERSION_21\n    }' android/app/build.gradle 2>/dev/null || true
+          fi
+
+      - name: Sync Capacitor Android Project
+        run: npx cap sync android
+
+      - name: Make Gradlew Executable
+        run: chmod +x android/gradlew || true
+
+      - name: Build Android APK (Release & Debug)
+        run: |
+          cd android
+          ./gradlew assembleRelease assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare APK Output Directory
+        id: vars
+        run: |
+          mkdir -p release-apks
+          echo "Listing all compiled APKs:"
+          find android/app/build/outputs/apk -type f -name "*.apk" || true
+          
+          RELEASE_APK=$(find android/app/build/outputs/apk/release -type f -name "*.apk" 2>/dev/null | head -n 1)
+          DEBUG_APK=$(find android/app/build/outputs/apk/debug -type f -name "*.apk" 2>/dev/null | head -n 1)
+
+          if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
+            cp "$RELEASE_APK" release-apks/chess-game-release.apk
+          fi
+
+          if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
+            cp "$DEBUG_APK" release-apks/chess-game-debug.apk
+          fi
+
+          if [ ! -f "release-apks/chess-game-release.apk" ] && [ -f "release-apks/chess-game-debug.apk" ]; then
+            cp release-apks/chess-game-debug.apk release-apks/chess-game-release.apk
+          fi
+
+          echo "Final collected APK files in release-apks/:"
+          ls -lh release-apks/
+
+          echo "build_time=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Upload APKs to GitHub Actions Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chess-game-apk
+          path: release-apks/*.apk
+          overwrite: true
+          retention-days: 30
+
+      - name: Update Latest Git Tag
+        continue-on-error: true
+        run: |
+          git tag -f latest-apk
+          git push -f origin latest-apk || true
+
+      - name: Publish and Overwrite Latest APK in GitHub Releases
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: latest-apk
+          target_commitish: ${{ github.sha }}
+          name: "三大经典国粹棋牌 - 最新打包 APK (Auto Build)"
+          body: |
+            🎮 **三大经典国粹棋牌 Android APK 最新安装包 (正式发布版)**
+
+            - 🚀 **自动覆盖机制**：仓库代码有任何更新并推送，本 Release 中的旧 APK 会被自动重新构建并覆盖替换为最新版本。
+            - 🕒 **最新构建时间**：${{ steps.vars.outputs.build_time }}
+            - 🔖 **Git 提交版本**：`${{ steps.vars.outputs.short_sha }}`
+
+            ---
+
+            ### 🇨🇳 国内极速加速下载通道 (免代理·高速直链，推荐国内网络使用)
+            - 🚀 **[极速线路 1 (GHProxy 专线)]**：
+              [点击直接高速下载 chess-game-release.apk](https://ghproxy.net/https://github.com/${{ github.repository }}/releases/download/latest-apk/chess-game-release.apk)
+            - ⚡️ **[高速线路 2 (GitMirror 专线)]**：
+              [点击直接高速下载 chess-game-release.apk](https://hub.gitmirror.com/https://github.com/${{ github.repository }}/releases/download/latest-apk/chess-game-release.apk)
+            - 🌐 **[镜像线路 3 (KKGitHub 节点)]**：
+              [点击前往 KKGitHub 镜像下载](https://kkgithub.com/${{ github.repository }}/releases/download/latest-apk/chess-game-release.apk)
+            - 📦 **[仓库 Raw 文件加速直链]**：
+              [点击高速下载仓库 app-latest.apk](https://ghproxy.net/https://raw.githubusercontent.com/${{ github.repository }}/main/apk/app-latest.apk)
+
+            ---
+
+            ### 🌍 GitHub 官方原始下载通道
+            - ⭐️ **[推荐] 正式安装版 (Release APK)**：
+              [点击下载 chess-game-release.apk](https://github.com/${{ github.repository }}/releases/download/latest-apk/chess-game-release.apk)
+            - 🛠️ **调试测试版 (Debug APK)**：
+              [点击下载 chess-game-debug.apk](https://github.com/${{ github.repository }}/releases/download/latest-apk/chess-game-debug.apk)
+
+            > 💡 **安卓安装说明**：手机浏览器下载完成后点击安装，如遇系统提示“允许来自此来源的应用”或“允许未知应用安装”，勾选允许即可安全畅玩！
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            release-apks/chess-game-release.apk
+            release-apks/chess-game-debug.apk
+
+      - name: Auto-Commit & Overwrite APK in Repository
+        continue-on-error: true
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p apk
+          cp release-apks/chess-game-release.apk apk/app-latest.apk
+          git add -f apk/app-latest.apk
+          if git diff --staged --quiet; then
+            echo "No change in binary apk file."
+          else
+            git commit -m "chore(apk): auto-update app-latest.apk [skip ci]"
+            git push origin HEAD:${{ github.ref_name }} || echo "Push skipped or branch protected"
+          fi

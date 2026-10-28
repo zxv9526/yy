@@ -1,0 +1,58 @@
+name: Build and Commit Dist
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build Dist
+        run: npm run build
+
+      - name: Upload Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Commit and Push Dist to Branch
+        continue-on-error: true
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f dist/
+          if git diff --staged --quiet; then
+            echo "No changes to dist"
+          else
+            git commit -m "chore(build): auto-compile dist assets [skip ci]"
+            git push origin main || echo "Git push skipped or needs write permission"
+          fi
+
+      - name: Create Release Archive
+        continue-on-error: true
+        run: tar -czf dist.tar.gz dist/
+
+      - name: Publish Release with dist.tar.gz
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: dist-latest
+          name: "Latest Prebuilt Dist Assets"
+          files: dist.tar.gz
