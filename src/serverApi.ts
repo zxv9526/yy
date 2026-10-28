@@ -119,6 +119,16 @@ function sendJson(res: any, status: number, body: any) {
   }
 }
 
+function sendHtml(res: any, status: number, html: string) {
+  if (typeof res.status === 'function' && typeof res.send === 'function') {
+    res.status(status).set('Content-Type', 'text/html; charset=utf-8').send(html);
+  } else {
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(html);
+  }
+}
+
 export async function executeTelegramUpdate(
   body: any,
   broadcast?: Function
@@ -939,7 +949,9 @@ export async function executeTelegramUpdate(
 
   if (chatId && botToken) {
     try {
-      const sendRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      const { getTelegramApiBase } = await import('./telegramBotService.ts');
+      const apiBase = getTelegramApiBase();
+      const sendRes = await fetch(`${apiBase}/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -948,14 +960,14 @@ export async function executeTelegramUpdate(
           parse_mode: 'Markdown',
           reply_markup: replyMarkup,
         }),
+        signal: AbortSignal.timeout(3000),
       });
       const sendData = (await sendRes.json().catch(() => ({}))) as any;
       if (!sendData?.ok) {
-        console.warn('⚠️ [Telegram Send Error]', sendData?.description);
         // If Markdown formatting failed due to reserved characters like '_' in usernames, fallback to plain text
         if (sendData?.description?.includes('entity') || sendData?.description?.includes('parse')) {
           const plainText = reply.replace(/[*_`\[\]]/g, '');
-          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          await fetch(`${apiBase}/bot${botToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -963,11 +975,13 @@ export async function executeTelegramUpdate(
               text: plainText,
               reply_markup: replyMarkup,
             }),
+            signal: AbortSignal.timeout(3000),
           }).catch(() => {});
         }
       }
     } catch (err: any) {
-      console.error('⚠️ [Telegram Send Network Error]', err?.message || err);
+      // In Webhook mode, outbound network errors are common in environments without VPN/proxy.
+      // The Webhook synchronous HTTP response delivers the reply directly without needing outbound access.
     }
   }
 
@@ -977,6 +991,7 @@ export async function executeTelegramUpdate(
     reply,
     command: rawText,
     replyMarkup,
+    chatId: chatId || undefined,
     timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
   };
 }
@@ -1859,6 +1874,26 @@ export async function handleApiRoute(
 
       const body = await parseJsonBody(req);
       const result = await executeTelegramUpdate(body, broadcast);
+
+      // Telegram Webhook Synchronous Response:
+      // If incoming request came from Telegram's webhook POST, return the reply directly
+      // in the HTTP 200 response body. Telegram's servers will immediately deliver it to the user.
+      // This is 100% proxy-free and requires NO outbound internet access from Termux/server!
+      if (pathname === '/api/telegram/webhook') {
+        const messageObj = body.message || body.edited_message || body.channel_post || body.callback_query?.message;
+        const targetChatId = messageObj?.chat?.id || body.callback_query?.from?.id || result.chatId;
+        if (targetChatId && result.reply) {
+          sendJson(res, 200, {
+            method: 'sendMessage',
+            chat_id: targetChatId,
+            text: result.reply,
+            parse_mode: 'Markdown',
+            reply_markup: result.replyMarkup,
+          });
+          return true;
+        }
+      }
+
       sendJson(res, 200, result);
     } catch (e) {
       sendJson(res, 500, { success: false, error: String(e) });
@@ -1866,10 +1901,10 @@ export async function handleApiRoute(
     return true;
   }
 
-  // 18. Telegram: Set Webhook Helper Endpoint
-  if (pathname === '/api/telegram/set-webhook' && (method === 'POST' || method === 'GET')) {
+  // 18. Telegram: Set Webhook Helper Endpoint & Browser One-Click Activation
+  if ((pathname === '/api/telegram/set-webhook' || pathname === '/api/telegram/register') && (method === 'POST' || method === 'GET')) {
     try {
-      const { refreshEnvFromDisk, normalizePublicUrl, stopTelegramPolling, getTelegramWebhookInfo } = await import('./telegramBotService.ts');
+      const { refreshEnvFromDisk, normalizePublicUrl, stopTelegramPolling, getTelegramApiBase } = await import('./telegramBotService.ts');
       refreshEnvFromDisk();
 
       const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
@@ -1895,41 +1930,123 @@ export async function handleApiRoute(
       }
 
       const webhookUrl = `${targetAppUrl}/api/telegram/webhook`;
-      const dropPending = urlObj.searchParams.get('drop_pending') === 'true' || urlObj.searchParams.get('drop_pending_updates') === 'true';
+      const dropPending = urlObj.searchParams.get('drop_pending') !== 'false';
 
       const rawSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim().replace(/^['"]+|['"]+$/g, '');
       const validSecret = /^[A-Za-z0-9_-]{1,256}$/.test(rawSecret) ? rawSecret : '';
-      const secretParam = validSecret
-        ? `&secret_token=${encodeURIComponent(validSecret)}`
-        : '';
+      const secretParam = validSecret ? `&secret_token=${encodeURIComponent(validSecret)}` : '';
 
-      const setWebhookUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(
+      const officialSetWebhookUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(
         webhookUrl
       )}${secretParam}&drop_pending_updates=${dropPending}&allowed_updates=${encodeURIComponent(
         JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query'])
       )}`;
 
-      const tgResp = await fetch(setWebhookUrl);
-      const tgData = await tgResp.json();
+      const officialWebhookInfoUrl = `https://api.telegram.org/bot${token}/getWebhookInfo`;
 
-      if (tgData && tgData.ok) {
-        stopTelegramPolling();
+      // 尝试由服务端发起直连注册 (若开启了本地代理或 TELEGRAM_API_BASE)
+      let serverOk = false;
+      let serverData: any = null;
+      let serverErrorMsg: string | null = null;
+
+      try {
+        const apiBase = getTelegramApiBase();
+        const serverFetchUrl = `${apiBase}/bot${token}/setWebhook?url=${encodeURIComponent(
+          webhookUrl
+        )}${secretParam}&drop_pending_updates=${dropPending}&allowed_updates=${encodeURIComponent(
+          JSON.stringify(['message', 'edited_message', 'channel_post', 'callback_query'])
+        )}`;
+
+        const tgResp = await fetch(serverFetchUrl, { signal: AbortSignal.timeout(3500) });
+        serverData = await tgResp.json().catch(() => ({}));
+        if (serverData && serverData.ok) {
+          serverOk = true;
+          stopTelegramPolling();
+        } else {
+          serverErrorMsg = serverData?.description || '未知状态';
+        }
+      } catch (err: any) {
+        serverErrorMsg = err?.message || String(err);
       }
 
-      const webhookInfo = await getTelegramWebhookInfo(token);
+      const isHtmlRequest = Boolean(req.headers?.accept?.includes('text/html'));
 
+      if (isHtmlRequest) {
+        const pageHtml = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram Bot Webhook 激活中枢</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; display: flex; justify-content: center; align-items: center; min-height: 100vh; box-sizing: border-box; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; max-width: 680px; width: 100%; padding: 28px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); }
+    h1 { margin-top: 0; font-size: 22px; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
+    .status-success { background: #065f46; color: #34d399; }
+    .status-pending { background: #854d0e; color: #fde047; }
+    .btn { display: inline-block; padding: 12px 24px; border-radius: 10px; font-weight: 700; text-decoration: none; cursor: pointer; text-align: center; font-size: 15px; transition: all 0.2s; margin-right: 10px; margin-bottom: 10px; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
+    .url-box { background: #0f172a; border: 1px solid #334155; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 12px; word-break: break-all; color: #94a3b8; margin: 12px 0; }
+    .tips { background: rgba(56, 189, 248, 0.1); border-left: 4px solid #38bdf8; padding: 12px; border-radius: 4px; font-size: 13px; line-height: 1.6; margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🤖 Telegram Bot Webhook 激活与诊断</h1>
+    <p>
+      当前状态:
+      ${serverOk
+        ? '<span class="status-badge status-success">🟢 本地已成功向 Telegram 官方登记生效</span>'
+        : '<span class="status-badge status-pending">⚡ 免代理双向直通待激活 (请点击下方按钮完成)</span>'}
+    </p>
+
+    <div class="tips">
+      <strong>💡 极简免翻墙双向直通原理：</strong><br>
+      本地 Termux / 服务器在未挂代理时无法直连 api.telegram.org（报错 <code>TypeError: fetch failed</code> 属于正常的国际网络阻断）。<br>
+      <strong>您无需在手机或本地安装任何海外代理！</strong> 只需在当前已开启科学上网（能够正常使用 Telegram）的手机或电脑浏览器中点击下方蓝色按钮，Telegram 官方服务器就会立即记录您的隧道地址并返回 <code>{"ok":true}</code>。<br>
+      激活后，Telegram 会通过穿透隧道主动向您的手机推送消息，本地服务通过 HTTP 响应即可<strong>免代理毫秒级直接回复</strong>！
+    </div>
+
+    <div style="margin: 20px 0;">
+      <a class="btn btn-primary" href="${officialSetWebhookUrl}" target="_blank">👉 点击立即在浏览器中一键激活 Webhook</a>
+      <a class="btn btn-secondary" href="${officialWebhookInfoUrl}" target="_blank">🔍 官方 Webhook 状态深度检测</a>
+    </div>
+
+    <p style="font-size: 13px; color: #94a3b8; margin-bottom: 4px;">当前绑定的回调入口 (Webhook URL):</p>
+    <div class="url-box">${webhookUrl}</div>
+
+    <p style="font-size: 13px; color: #94a3b8; margin-bottom: 4px;">Telegram 官方激活直链 (可复制并在任意可上 Telegram 的设备打开):</p>
+    <div class="url-box">${officialSetWebhookUrl}</div>
+  </div>
+</body>
+</html>`;
+        sendHtml(res, 200, pageHtml);
+        return true;
+      }
+
+      // JSON 模式返回
       sendJson(res, 200, {
-        success: tgData.ok,
-        telegramResponse: tgData,
-        configuredWebhookUrl: webhookUrl,
-        realtimeWebhookInfo: webhookInfo,
-        status: tgData.ok ? 'registered_successfully' : 'registration_failed',
-        advice: tgData.ok
+        success: serverOk,
+        mode: serverOk ? 'server_registered' : 'browser_registration_ready',
+        message: serverOk
           ? 'Webhook 已成功在 Telegram 官方服务器注册并生效！'
-          : `注册失败原因: ${tgData.description || '未知异常'}`,
+          : '本地服务器直连受限 (TypeError: fetch failed，国内正常现象)。已为您生成【浏览器一键激活直链】，在能使用 Telegram 的浏览器中打开此链接即可完成激活！',
+        officialSetWebhookUrl,
+        officialWebhookInfoUrl,
+        configuredWebhookUrl: webhookUrl,
+        serverFetchError: serverErrorMsg,
+        instruction: '请直接在手机浏览器或电脑浏览器（能正常使用 Telegram 的环境）中点击 officialSetWebhookUrl 完成注册。Telegram 官方会立即返回 ok: true。注册后，手机端无需任何代理即可通过穿透隧道毫秒级收发 Bot 消息！',
       });
     } catch (e) {
-      sendJson(res, 500, { success: false, error: String(e) });
+      sendJson(res, 200, {
+        success: false,
+        error: String(e),
+        tip: '请在浏览器中打开 /api/telegram/set-webhook 使用一键直连激活助手。',
+      });
     }
     return true;
   }
@@ -1937,7 +2054,7 @@ export async function handleApiRoute(
   // 19. Telegram: Get Webhook Info Helper Endpoint (深度诊断)
   if (pathname === '/api/telegram/webhook-info' && method === 'GET') {
     try {
-      const { refreshEnvFromDisk, normalizePublicUrl } = await import('./telegramBotService.ts');
+      const { refreshEnvFromDisk, normalizePublicUrl, getTelegramApiBase } = await import('./telegramBotService.ts');
       refreshEnvFromDisk();
 
       const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, '');
@@ -1952,40 +2069,65 @@ export async function handleApiRoute(
       const envRawUrl = (process.env.URL || process.env.APP_URL || process.env.WEBHOOK_URL || '').trim();
       const normalizedEnvUrl = normalizePublicUrl(envRawUrl);
       const expectedWebhookUrl = normalizedEnvUrl ? `${normalizedEnvUrl}/api/telegram/webhook` : '';
+      const officialInfoUrl = `https://api.telegram.org/bot${token}/getWebhookInfo`;
 
-      const tgResp = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
-      const tgData = await tgResp.json();
-      const info = tgData.result || {};
+      let serverFetchOk = false;
+      let tgData: any = null;
 
-      const isRegistered = Boolean(info.url && info.url.length > 0);
-      const isUrlMatched = expectedWebhookUrl ? (info.url === expectedWebhookUrl) : false;
+      try {
+        const apiBase = getTelegramApiBase();
+        const tgResp = await fetch(`${apiBase}/bot${token}/getWebhookInfo`, {
+          signal: AbortSignal.timeout(3500),
+        });
+        tgData = await tgResp.json().catch(() => ({}));
+        if (tgData && tgData.ok) {
+          serverFetchOk = true;
+        }
+      } catch (err) {}
 
-      let diagnosis = '正常';
-      if (!isRegistered) {
-        diagnosis = 'Telegram 官方未注册任何 Webhook 回调地址 (当前可能处于未注册状态或长轮询模式)';
-      } else if (!isUrlMatched) {
-        diagnosis = `URL 不匹配：Telegram 登记的地址为 [${info.url}]，而当前 .env 中配置的是 [${expectedWebhookUrl}]。请访问 /api/telegram/set-webhook 重新注册！`;
-      } else if (info.last_error_message) {
-        diagnosis = `Telegram 官方上报回调推送错误: "${info.last_error_message}"。若包含 502/Bad Gateway 说明隧道未连通本地 3000 端口；若包含 Connection timeout 说明隧道中断。`;
+      if (serverFetchOk && tgData) {
+        const info = tgData.result || {};
+        const isRegistered = Boolean(info.url && info.url.length > 0);
+        const isUrlMatched = expectedWebhookUrl ? (info.url === expectedWebhookUrl) : false;
+
+        let diagnosis = '正常';
+        if (!isRegistered) {
+          diagnosis = 'Telegram 官方未注册任何 Webhook 回调地址。请访问 /api/telegram/set-webhook 激活！';
+        } else if (!isUrlMatched) {
+          diagnosis = `URL 不匹配：Telegram 登记的地址为 [${info.url}]，而当前配置的是 [${expectedWebhookUrl}]。请访问 /api/telegram/set-webhook 重新登记！`;
+        } else if (info.last_error_message) {
+          diagnosis = `Telegram 官方上报错误: "${info.last_error_message}"。若为 502/Bad Gateway 说明隧道未连通本地 3000 端口；若为 Connection timeout 说明隧道中断。`;
+        } else {
+          diagnosis = '🟢 Webhook 挂载状态完全正常，Telegram 官方可毫秒级直推消息！';
+        }
+
+        sendJson(res, 200, {
+          success: true,
+          envUrl: envRawUrl,
+          normalizedEnvUrl,
+          expectedWebhookUrl,
+          registeredWebhookUrl: info.url || '未注册 (为空)',
+          isUrlMatched,
+          hasPendingUpdates: info.pending_update_count || 0,
+          lastErrorDate: info.last_error_date ? new Date(info.last_error_date * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : null,
+          lastErrorMessage: info.last_error_message || null,
+          diagnosis,
+          webhookInfo: info,
+          officialInfoUrl,
+        });
       } else {
-        diagnosis = '🟢 Webhook 挂载状态完全正常，Telegram 官方可毫秒级直推消息！';
+        // 本地请求超时或直连受限 -> 优雅返回官方直链
+        sendJson(res, 200, {
+          success: false,
+          networkNotice: '本地服务器直连 Telegram 官方受限 (属于国内网络正常状态)。请在具备科学上网的浏览器中点击 officialInfoUrl 直接查看官方登记状态。',
+          officialInfoUrl,
+          expectedWebhookUrl,
+          envUrl: envRawUrl,
+          oneClickActivateUrl: `/api/telegram/set-webhook`,
+        });
       }
-
-      sendJson(res, 200, {
-        success: tgData.ok,
-        envUrl: envRawUrl,
-        normalizedEnvUrl,
-        expectedWebhookUrl,
-        registeredWebhookUrl: info.url || '未注册 (为空)',
-        isUrlMatched,
-        hasPendingUpdates: info.pending_update_count || 0,
-        lastErrorDate: info.last_error_date ? new Date(info.last_error_date * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : null,
-        lastErrorMessage: info.last_error_message || null,
-        diagnosis,
-        webhookInfo: info,
-      });
     } catch (e) {
-      sendJson(res, 500, { success: false, error: String(e) });
+      sendJson(res, 200, { success: false, error: String(e) });
     }
     return true;
   }
