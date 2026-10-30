@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { loadDatabase, saveDatabase } from './src/serverStorage.ts';
 import { handleApiRoute } from './src/serverApi.ts';
 import { initTelegramBotService } from './src/telegramBotService.ts';
+import { presenceTracker } from './src/presenceTracker.ts';
 
 // Auto-detect and load .env from project directory, parent directory (~/.env), or HOME
 const possibleEnvPaths = [
@@ -165,6 +166,9 @@ interface SceneWaitingRoom {
 
 const sceneWaitingRooms = new Map<string, SceneWaitingRoom>();
 
+// Set authoritative presence references
+presenceTracker.setReferences({ rooms, sceneWaitingRooms, wss });
+
 function broadcast(payload: unknown) {
   try {
     const raw = JSON.stringify(payload);
@@ -179,8 +183,11 @@ function broadcast(payload: unknown) {
 }
 
 wss.on('connection', (ws) => {
+  const socketId = Math.random().toString(36).slice(2, 10);
+  (ws as any).socketId = socketId;
   (ws as any).isAlive = true;
   (ws as any).lastHeartbeat = Date.now();
+  presenceTracker.recordClient(socketId, { gameType: 'lobby' });
 
   ws.on('pong', () => {
     (ws as any).isAlive = true;
@@ -192,17 +199,26 @@ wss.on('connection', (ws) => {
   });
 
   try {
+    const presenceCounts = presenceTracker.getRealGamePresence();
     ws.send(
       JSON.stringify({
         type: 'lobby_snapshot',
         rooms: Array.from(rooms.values()),
-        onlineCount: wss.clients.size + 36,
+        onlineCount: wss.clients.size,
+        counts: presenceCounts,
         serverTs: Date.now(),
       })
     );
   } catch {}
 
+  // Broadcast real presence counts on new client connection
+  broadcast({
+    type: 'presence_counts',
+    counts: presenceTracker.getRealGamePresence(),
+  });
+
   ws.on('close', () => {
+    presenceTracker.removeClient((ws as any).socketId);
     const sRoomId = (ws as any).sceneRoomId;
     const pId = (ws as any).scenePlayerId;
     if (sRoomId && sceneWaitingRooms.has(sRoomId)) {
@@ -226,6 +242,11 @@ wss.on('connection', (ws) => {
         });
       }
     }
+    // Broadcast updated genuine player count across games
+    broadcast({
+      type: 'presence_counts',
+      counts: presenceTracker.getRealGamePresence(),
+    });
   });
 
   ws.on('message', (data) => {
@@ -239,9 +260,27 @@ wss.on('connection', (ws) => {
             type: 'pong',
             clientTs: msg.clientTs,
             serverTs: Date.now(),
-            onlineCount: wss.clients.size + 36,
+            onlineCount: wss.clients.size,
           })
         );
+        return;
+      }
+
+      if (msg.type === 'presence_update') {
+        const targetGame = msg.gameType === 'yansan' || msg.gameType === 'shisanshui' || msg.gameType === 'mahjong' ? msg.gameType : 'lobby';
+        presenceTracker.updateClientGame((ws as any).socketId, targetGame, msg.sceneMode);
+        if (msg.playerId) {
+          presenceTracker.recordClient((ws as any).socketId, {
+            gameType: targetGame,
+            playerId: msg.playerId,
+            playerName: msg.playerName,
+            sceneMode: msg.sceneMode,
+          });
+        }
+        broadcast({
+          type: 'presence_counts',
+          counts: presenceTracker.getRealGamePresence(),
+        });
         return;
       }
 
@@ -261,6 +300,19 @@ wss.on('connection', (ws) => {
           coins: 2000,
           seat: 0,
         };
+
+        // Enforce 100 points minimum admission for all games
+        if (typeof p.coins === 'number' && p.coins < 100) {
+          ws.send(
+            JSON.stringify({
+              type: 'scene_join_rejected',
+              reason: 'insufficient_coins',
+              requiredCoins: 100,
+              currentCoins: p.coins,
+            })
+          );
+          return;
+        }
 
         // Find existing open room for this exact gameType + sceneMode
         let room: SceneWaitingRoom | undefined;
@@ -297,6 +349,14 @@ wss.on('connection', (ws) => {
         (ws as any).sceneRoomId = room.id;
         (ws as any).scenePlayerId = p.id;
 
+        presenceTracker.updateClientGame((ws as any).socketId, gType, sMode);
+        presenceTracker.recordClient((ws as any).socketId, {
+          gameType: gType,
+          playerId: p.id,
+          playerName: p.name,
+          sceneMode: sMode,
+        });
+
         broadcast({
           type: 'scene_room_update',
           roomId: room.id,
@@ -305,6 +365,11 @@ wss.on('connection', (ws) => {
           players: room.players,
           maxPlayers: room.maxPlayers,
           status: room.status,
+        });
+
+        broadcast({
+          type: 'presence_counts',
+          counts: presenceTracker.getRealGamePresence(),
         });
 
         if (room.players.length >= room.maxPlayers) {
@@ -322,6 +387,7 @@ wss.on('connection', (ws) => {
       }
 
       if (msg.type === 'scene_leave') {
+        presenceTracker.updateClientGame((ws as any).socketId, 'lobby');
         for (const [id, room] of sceneWaitingRooms.entries()) {
           if (room.gameType === msg.gameType && room.sceneMode === msg.sceneMode) {
             room.players = room.players.filter((pl) => pl.id !== msg.playerId);
@@ -344,6 +410,10 @@ wss.on('connection', (ws) => {
             }
           }
         }
+        broadcast({
+          type: 'presence_counts',
+          counts: presenceTracker.getRealGamePresence(),
+        });
         return;
       }
 
@@ -353,7 +423,9 @@ wss.on('connection', (ws) => {
           gameType: msg.gameType,
           sceneMode: msg.sceneMode,
           sender: msg.sender || '牌友',
-          text: String(msg.text || '').slice(0, 100),
+          text: msg.text ? String(msg.text || '').slice(0, 100) : '🎤 [等候室实时语音]',
+          audio: msg.audio || null,
+          duration: Number(msg.duration) || 0,
           timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
         });
         return;
@@ -490,21 +562,26 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      if (msg.type === 'game_chat') {
-        const room = rooms.get(msg.roomId);
-        if (room && msg.text) {
+      if (msg.type === 'game_chat' || msg.type === 'room_voice') {
+        const targetRoomId = msg.roomId || 'RM-202';
+        const room = rooms.get(targetRoomId);
+        if (msg.text || msg.audio) {
           const chatMsg = {
             id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             sender: msg.sender || '牌友',
             avatar: msg.avatar || '👤',
-            text: String(msg.text).slice(0, 100),
+            text: msg.text ? String(msg.text).slice(0, 100) : (msg.audio ? '🎤 [牌桌实时语音]' : ''),
             prop: msg.prop || null,
             targetSeat: msg.targetSeat !== undefined ? msg.targetSeat : null,
             voice: Boolean(msg.voice),
+            audio: msg.audio || null,
+            duration: Number(msg.duration) || 0,
             timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
           };
-          room.chat = [...room.chat.slice(-49), chatMsg];
-          broadcast({ type: 'chat_broadcast', roomId: room.id, message: chatMsg });
+          if (room) {
+            room.chat = [...room.chat.slice(-49), chatMsg];
+          }
+          broadcast({ type: 'chat_broadcast', roomId: targetRoomId, message: chatMsg });
         }
         return;
       }

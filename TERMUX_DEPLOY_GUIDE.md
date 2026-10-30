@@ -382,3 +382,80 @@ bash ~/start_chess.sh
 
 ### Q4: 如何在同一局域网内用其他手机或平板加入游戏？
 - **答**：在 Ubuntu 中运行 `ip -4 route get 1.1.1.1` 查看手机内网 IP（例如 `192.168.1.88`）。确保其他手机连接同一个 Wi-Fi 或连接部署手机开启的个人热点，在浏览器输入 `http://192.168.1.88:3000` 即可同台对战！
+
+---
+
+## 十三、 Termux Ubuntu 终极 24 小时后台持久保活方案 (突破 Android 杀后台与休眠)
+
+如果在实际使用中遇到：**“手机息屏一段时间后服务停止响应”、“PM2 无法保活”**，这是由 Android 系统的底层机制（Doze 休眠模式、App Freezer 冻结、电池白名单及 OOM 内存回收机制）造成的。
+请按照以下**五层防护方案**进行配置，彻底解决手机后台杀进程问题：
+
+### 1. 第一层：Termux 宿主开启 CPU 唤醒锁与常驻前台服务
+在进入 Ubuntu 前，在 Termux 原生终端执行：
+```bash
+# 1. 获取 CPU 唤醒锁，防止锁屏时 CPU 深度休眠
+termux-wake-lock
+
+# 2. 安装 termux-api 并创建常驻通知栏服务（降低系统杀后台优先级）
+pkg install -y termux-api
+termux-notification --title "国粹棋牌服务运行中" --content "Termux Ubuntu 守护中，点击返回" --id 888 --ongoing
+```
+
+### 2. 第二层：手机操作系统设置“无限制”与应用锁定
+1. **电池策略改为无限制**：长按 Termux 应用图标 -> 应用信息 -> 电池使用情况 -> 设为 **“无限制” (Unrestricted)** 或 “允许完全后台高耗电”。
+2. **多任务卡片加锁**：打开手机多任务后台界面，找到 Termux，下拉或长按点击 **“锁定” (小锁图标)**，防止系统一键清理时关闭。
+3. **厂商专属优化**：
+   - **小米 (HyperOS/MIUI)**：在“应用管理”中开启“自启动”和“关联启动”，省电策略设为“无限制”。
+   - **华为/荣耀 (HarmonyOS/MagicOS)**：在“应用启动管理”中关闭“自动管理”，开启“允许自启动”、“允许关联启动”、“允许后台活动”。
+   - **OPPO/vivo/一加**：在“电池”或“后台高耗电”中开启 Termux，允许浮窗/后台常驻。
+4. **保持 Wi-Fi 息屏不休眠**：手机系统设置 -> WLAN/Wi-Fi -> 高级设置 -> “在休眠状态下保持 Wi-Fi 连接”设为“始终”。
+
+### 3. 第三层：使用 `tmux` + 死循环守护脚本 (替代 PM2 假死)
+在 proot 容器内，由于没有完整的 systemd，PM2 的守护进程可能被冻结。使用原生的 `tmux` 会话配合 Shell 守护脚本最为轻量稳健：
+
+在 Ubuntu 容器内执行：
+```bash
+# 1. 安装 tmux
+apt-get install -y tmux
+
+# 2. 创建守护脚本 ~/run_guard.sh
+cat << 'EOF' > ~/run_guard.sh
+#!/bin/bash
+cd ~/chess-lobby
+while true; do
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 启动全栈棋牌服务..."
+  fuser -k 3000/tcp 2>/dev/null || true
+  node server.ts
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 服务意外退出，5秒后自动重新拉起..."
+  sleep 5
+done
+EOF
+chmod +x ~/run_guard.sh
+
+# 3. 启动后台 tmux 会话
+tmux new-session -d -s chess "bash ~/run_guard.sh"
+```
+> 💡 **小贴士**：
+> - 查看实时日志：`tmux attach -t chess`
+> - 退出查看回到终端（保持后台运行）：按下键盘 `Ctrl + B`，然后按 `D` 即可。
+
+### 4. 第四层：安装 Termux:Boot 实现手机开机自动拉起
+1. 从 F-Droid 下载安装 **Termux:Boot** 插件；
+2. 首次打开一次 Termux:Boot 应用授予自启权限；
+3. 在 Termux 中创建自启脚本：
+```bash
+mkdir -p ~/.termux/boot/
+cat << 'EOF' > ~/.termux/boot/start_chess.sh
+#!/data/data/com.termux/files/usr/bin/bash
+termux-wake-lock
+termux-notification --title "棋牌自启动中" --content "正在拉起 Ubuntu 容器与游戏服务..." --id 888 --ongoing
+proot-distro login ubuntu -- bash -c "tmux new-session -d -s chess 'bash ~/run_guard.sh'"
+EOF
+chmod +x ~/.termux/boot/start_chess.sh
+```
+手机今后无论重启还是关机开机，都会在开机解锁后全自动启动棋牌后台！
+
+### 5. 第五层：外部 HTTP 心跳探针防休眠
+使用免费的在线监控平台（如 **UptimeRobot**、**BetterUptime** 或 **cron-job.org**）：
+- 添加一个每 **5 分钟** 请求一次的 HTTP(s) 监控项，地址填入您的 Cloudflare Tunnel 穿透域名（或局域网内其他设备定时 curl）。
+- 定期的外部 HTTP 请求不仅能实现掉线告警，还能主动激活手机的网络接口，防止运营商或 Android 基带强行休眠断开 TCP 连接。

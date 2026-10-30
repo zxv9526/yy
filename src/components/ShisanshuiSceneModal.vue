@@ -18,11 +18,11 @@
               水镜楼 · 十三张（十三水）场景选择
             </h2>
             <span class="text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono font-bold">
-              头中尾三道比水 · 严防倒水
+              头中尾三道比水 · 准入100分
             </span>
           </div>
           <p class="text-[10px] sm:text-xs text-[#94A3B8] font-mono mt-0.5">
-            四人场（1副牌52张全发） · 八人场（2副扑克104张全发）
+            四人场（1副牌52张全发 · 准入100分） · 八人场（2副扑克104张全发）
           </p>
         </div>
       </div>
@@ -183,8 +183,8 @@ const SCENES: SceneItem[] = [
     isEight: false,
     deckCountText: '1 副牌 · 52张',
     modeDesc: '快速即配 · 实时竞技',
-    ruleDesc: '4人×13张 = 52张全发 · 打枪翻倍 · 全垒打大捷',
-    baseStake: 200,
+    ruleDesc: '4人×13张 = 52张全发 · 打枪翻倍 · 准入100分',
+    baseStake: 100,
   },
   {
     id: 'four-booking',
@@ -192,8 +192,8 @@ const SCENES: SceneItem[] = [
     isEight: false,
     deckCountText: '1 副牌 · 52张',
     modeDesc: '包厢预约 · 亲友雅聚',
-    ruleDesc: '专属房号 · 严防倒水 · 私密对战免打扰',
-    baseStake: 200,
+    ruleDesc: '专属房号 · 严防倒水 · 准入100分',
+    baseStake: 100,
   },
   {
     id: 'eight-realtime',

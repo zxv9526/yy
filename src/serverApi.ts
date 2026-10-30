@@ -8,6 +8,7 @@ import {
 } from './serverStorage.ts';
 import fs from 'fs';
 import path from 'path';
+import { presenceTracker } from './presenceTracker.ts';
 
 interface AdminPendingState {
   action: 'findphone' | 'authphone' | 'delphone' | 'deluser' | 'addpoints' | 'subpoints' | 'setpoints' | 'ban' | 'unban' | 'broadcast' | 'batchpoints';
@@ -1430,6 +1431,17 @@ export async function handleApiRoute(
         senderProfile: sender,
         recipientProfile: recipient,
       });
+    } catch (e) {
+      sendJson(res, 500, { success: false, error: String(e) });
+    }
+    return true;
+  }
+
+  // 7.5 Real-time Presence Counts Endpoint
+  if (pathname === '/api/presence' && method === 'GET') {
+    try {
+      const counts = presenceTracker.getRealGamePresence();
+      sendJson(res, 200, { success: true, ...counts });
     } catch (e) {
       sendJson(res, 500, { success: false, error: String(e) });
     }

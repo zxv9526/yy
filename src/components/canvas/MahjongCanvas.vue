@@ -16,24 +16,36 @@
         class="w-full h-full absolute inset-0 block cursor-pointer"
       ></canvas>
 
-      <!-- 3D Dice Rolling & Dealing Stage Overlay (打色子定庄与抓牌要牌动效) -->
+      <!-- Realistic 3D Mahjong Dice Cup Overlay (打色子定庄动效) -->
       <div
-        v-if="dealingPhase !== 'playing' && !hasWon && !isDrawStalemate"
-        class="absolute inset-0 pointer-events-none z-25 flex flex-col items-center justify-center select-none backdrop-blur-xs"
-        :style="{
-          backgroundColor: `${props.tableTheme?.feltColor || '#7E22CE'}dd`,
-          background: `radial-gradient(ellipse at 50% 45%, ${props.tableTheme?.highlightColor || '#A855F7'}cc 0%, ${props.tableTheme?.feltColor || '#7E22CE'}e6 60%, ${props.tableTheme?.edgeColor || '#581C87'}f2 100%)`
-        }"
+        v-if="dealingPhase === 'rolling_dice' && !hasWon && !isDrawStalemate"
+        class="absolute inset-0 z-30 flex flex-col items-center justify-center p-3 select-none pointer-events-auto bg-black/65 backdrop-blur-xs"
+      >
+        <MahjongDiceCup
+          :d1="dealerDice?.d1 || 1"
+          :d2="dealerDice?.d2 || 1"
+          :dealer-seat="dealerSeat"
+          :is-dealer-continuing="isDealerContinuing"
+          :title="isDealerContinuing ? `【${SEAT_NAMES[dealerSeat]}】连庄掷骰 · 确定起牌开门` : '打色子定庄 · 开门取牌'"
+          :room-players="props.roomPlayers"
+          @roll-finished="startDealingTilesAnimation"
+          @skip="skipDealingAnimation"
+        />
+      </div>
+
+      <!-- Dealing & Sorting Stage Overlay (抓牌理牌动效) -->
+      <div
+        v-else-if="dealingPhase !== 'playing' && !hasWon && !isDrawStalemate"
+        class="absolute inset-0 pointer-events-none z-25 flex flex-col items-center justify-center select-none backdrop-blur-xs bg-black/55"
       >
         <div
-          class="flex flex-col items-center justify-center p-3 sm:p-4 rounded-2xl sm:rounded-3xl bg-black/80 border-2 border-amber-400/70 backdrop-blur-md shadow-[0_0_50px_rgba(0,0,0,0.9),0_0_25px_rgba(245,158,11,0.35)] pointer-events-auto transition-all transform scale-100 max-w-sm sm:max-w-md w-full mx-4"
+          class="flex flex-col items-center justify-center p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-[#1C120C]/95 border-2 border-amber-400/80 backdrop-blur-md shadow-[0_16px_40px_rgba(0,0,0,0.9),0_0_30px_rgba(245,158,11,0.3)] pointer-events-auto transition-all transform scale-100 max-w-sm sm:max-w-md w-full mx-4"
         >
           <!-- Top Header Tag & Skip Button -->
-          <div class="w-full flex items-center justify-between pb-2 mb-1.5 border-b border-white/10 text-xs">
-            <span class="text-amber-300 font-mono font-bold flex items-center gap-1.5">
-              <span class="animate-pulse text-base">🎲</span>
-              <span v-if="dealingPhase === 'rolling_dice'">打色子定庄 · 开门点数</span>
-              <span v-else-if="dealingPhase === 'dealing_tiles'">四道抓牌 · 牌背朝上发牌</span>
+          <div class="w-full flex items-center justify-between pb-2 mb-2 border-b border-amber-500/20 text-xs">
+            <span class="text-amber-300 font-serif-title font-bold flex items-center gap-1.5">
+              <span class="text-base animate-pulse">🀄</span>
+              <span v-if="dealingPhase === 'dealing_tiles'">四道抓牌 · 牌背朝上发牌</span>
               <span v-else>整牌理牌 · 翻面亮牌</span>
             </span>
             <button
@@ -42,89 +54,43 @@
               class="px-2.5 py-0.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 text-amber-200 border border-amber-500/40 text-[11px] font-bold transition-all active:scale-95 cursor-pointer flex items-center gap-1 shadow-sm"
               title="跳过发牌动画，直接进入对局"
             >
-              <span>跳过发牌</span>
+              <span>跳过</span>
               <span>⏩</span>
             </button>
           </div>
 
-          <!-- Center: Real 3D Ivory Mahjong Dice -->
-          <div class="relative py-2 sm:py-3 flex items-center justify-center gap-4 sm:gap-6">
-            <!-- Die 1 -->
-            <div
-              class="w-13 h-13 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-b from-[#FFFFFF] via-[#F8FAFC] to-[#E2E8F0] border-2 border-amber-400/90 shadow-[0_8px_20px_rgba(0,0,0,0.7),inset_0_2px_4px_rgba(255,255,255,0.9)] flex items-center justify-center transition-transform"
-              :class="{ 'animate-dice-tumble-1': isRollingDice }"
-            >
-              <div class="w-full h-full p-1.5 sm:p-2 grid grid-cols-3 grid-rows-3 items-center justify-items-center">
-                <template v-for="(dot, pIdx) in getDicePipGrid(currentDiceDisplay.d1)" :key="pIdx">
-                  <span
-                    v-if="dot.visible"
-                    class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full shadow-inner"
-                    :class="dot.color === 'red' ? 'bg-[#DC2626] shadow-red-900/50' : 'bg-[#1E293B] shadow-black/60'"
-                  ></span>
-                  <span v-else class="w-2.5 h-2.5 sm:w-3 sm:h-3"></span>
-                </template>
-              </div>
+          <div class="text-center w-full py-1">
+            <div class="text-sm sm:text-base font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-400 font-serif-title drop-shadow mb-1">
+              🎯 【{{ SEAT_NAMES[dealerSeat] }}】坐庄起手率先出牌
             </div>
-
-            <!-- Plus Sign -->
-            <span class="text-xl sm:text-2xl font-black font-mono text-amber-300 drop-shadow">+</span>
-
-            <!-- Die 2 -->
-            <div
-              class="w-13 h-13 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-b from-[#FFFFFF] via-[#F8FAFC] to-[#E2E8F0] border-2 border-amber-400/90 shadow-[0_8px_20px_rgba(0,0,0,0.7),inset_0_2px_4px_rgba(255,255,255,0.9)] flex items-center justify-center transition-transform"
-              :class="{ 'animate-dice-tumble-2': isRollingDice }"
-            >
-              <div class="w-full h-full p-1.5 sm:p-2 grid grid-cols-3 grid-rows-3 items-center justify-items-center">
-                <template v-for="(dot, pIdx) in getDicePipGrid(currentDiceDisplay.d2)" :key="pIdx">
-                  <span
-                    v-if="dot.visible"
-                    class="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full shadow-inner"
-                    :class="dot.color === 'red' ? 'bg-[#DC2626] shadow-red-900/50' : 'bg-[#1E293B] shadow-black/60'"
-                  ></span>
-                  <span v-else class="w-2.5 h-2.5 sm:w-3 sm:h-3"></span>
-                </template>
-              </div>
-            </div>
-          </div>
-
-          <!-- Bottom Dice Announcement & Dealing Progress -->
-          <div class="mt-1.5 text-center w-full">
-            <div v-if="dealerDice && !isRollingDice" class="flex flex-col items-center gap-1">
-              <div class="text-xs sm:text-sm font-black font-mono text-amber-200 tracking-wide">
-                色子点数：{{ dealerDice.d1 }} + {{ dealerDice.d2 }} = <span class="text-amber-400 text-sm sm:text-base font-extrabold">{{ dealerDice.sum }} 点</span>
-              </div>
-              <div class="text-sm sm:text-base font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-400 font-serif-title drop-shadow">
-                🎯 {{ isDealerContinuing ? `【${SEAT_NAMES[dealerSeat]}】上局自摸坐庄！起手开牌率先出牌` : `【${SEAT_NAMES[dealerSeat]}】坐庄开门！起手率先出牌` }}
-              </div>
-            </div>
-            <div v-else class="text-xs sm:text-sm font-bold text-amber-300/90 font-mono animate-pulse">
-              {{ isDealerContinuing ? `🎲 上局【${SEAT_NAMES[dealerSeat]}】自摸继续坐庄，庄家掷色开牌中...` : '🎲 摇骰掷色中，正在确定本局庄家与抓牌席位...' }}
+            <div class="text-[11px] text-[#D4C3B3] font-mono">
+              {{ dealingPhase === 'dealing_tiles' ? '四方茶客依序抓牌中...' : '整牌排理完毕，翻面开局！' }}
             </div>
 
             <!-- Dealing 4-Wave Progress Indicator -->
-            <div v-if="dealingPhase === 'dealing_tiles'" class="mt-2 pt-2 border-t border-white/10 flex items-center justify-center gap-1 text-[9px] sm:text-[10px] font-mono">
+            <div class="mt-3 pt-2.5 border-t border-amber-500/20 flex items-center justify-center gap-1 sm:gap-1.5 text-[9px] sm:text-[10px] font-mono">
               <span
-                class="px-1.5 sm:px-2 py-0.5 rounded border transition-all"
+                class="px-2 py-0.5 rounded-lg border transition-all"
                 :class="myHandDealtCount >= 4 ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/60 font-bold' : 'bg-white/5 text-white/35 border-white/10'"
               >1巡4张</span>
               <span class="text-white/30">→</span>
               <span
-                class="px-1.5 sm:px-2 py-0.5 rounded border transition-all"
+                class="px-2 py-0.5 rounded-lg border transition-all"
                 :class="myHandDealtCount >= 8 ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/60 font-bold' : 'bg-white/5 text-white/35 border-white/10'"
               >2巡8张</span>
               <span class="text-white/30">→</span>
               <span
-                class="px-1.5 sm:px-2 py-0.5 rounded border transition-all"
+                class="px-2 py-0.5 rounded-lg border transition-all"
                 :class="myHandDealtCount >= 12 ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/60 font-bold' : 'bg-white/5 text-white/35 border-white/10'"
               >3巡12张</span>
               <span class="text-white/30">→</span>
               <span
-                class="px-1.5 sm:px-2 py-0.5 rounded border transition-all"
+                class="px-2 py-0.5 rounded-lg border transition-all"
                 :class="myHandDealtCount >= 13 ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/60 font-bold' : 'bg-white/5 text-white/35 border-white/10'"
               >4巡13张</span>
               <span class="text-white/30">→</span>
               <span
-                class="px-1.5 sm:px-2 py-0.5 rounded border transition-all"
+                class="px-2 py-0.5 rounded-lg border transition-all"
                 :class="(dealerSeat === 0 ? myHandDealtCount >= 14 : oppHandsDealtCount[dealerSeat - 1] >= 14) ? 'bg-amber-500/35 text-amber-300 border-amber-500/60 font-black' : 'bg-white/5 text-white/35 border-white/10'"
               >跳牌14张</span>
             </div>
@@ -505,6 +471,7 @@ import {
   onMahjongAssetsLoaded,
   getMahjongImagePath,
 } from '../../utils/mahjongAssets';
+import MahjongDiceCup from '../effects/MahjongDiceCup.vue';
 
 interface MahjongTile {
   id: string;
@@ -1144,7 +1111,7 @@ function dealNewMatch(designatedDealer?: number) {
     announceTimer = null;
   }
 
-  // 初始发牌动效阶段：牌背朝上发牌，不立即展示手牌！
+  // 初始发牌动效阶段：3D 色盅与双色子定庄
   dealingPhase.value = 'rolling_dice';
   isRollingDice.value = true;
   myHandDealtCount.value = 0;
@@ -1155,37 +1122,6 @@ function dealNewMatch(designatedDealer?: number) {
     ? `🎲 【${SEAT_NAMES[targetDealer]}】上局自摸继续坐庄，开局掷色定开门...`
     : '🎲 开局掷双色子定庄开门...';
   drawTable();
-
-  soundFX.playDiceRoll();
-
-  // 骰子快速翻滚 1.1 秒
-  diceRollInterval = setInterval(() => {
-    currentDiceDisplay.value = {
-      d1: Math.floor(Math.random() * 6) + 1,
-      d2: Math.floor(Math.random() * 6) + 1,
-    };
-  }, 45);
-
-  const settleTimer = setTimeout(() => {
-    if (diceRollInterval) {
-      clearInterval(diceRollInterval);
-      diceRollInterval = null;
-    }
-    isRollingDice.value = false;
-    currentDiceDisplay.value = { d1, d2 };
-    soundFX.playMahjongClack();
-    tipMessage.value = isContinuing
-      ? `🎲 庄家掷色【${d1}点】+【${d2}点】=【${sum}点】➔ 【${SEAT_NAMES[targetDealer]}】上局自摸坐庄，率先开牌！`
-      : `🎲 掷出色子【${d1}点】+【${d2}点】=【${sum}点】➔ 【${SEAT_NAMES[targetDealer]}】坐庄开门！`;
-    drawTable();
-
-    // 稍作停顿展示点数，接着开启四道要牌发牌动效
-    const dealTimer = setTimeout(() => {
-      startDealingTilesAnimation();
-    }, 750);
-    dealingAnimTimers.push(dealTimer);
-  }, 1150);
-  dealingAnimTimers.push(settleTimer);
 
   emit('restart');
 }
@@ -2899,27 +2835,5 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-@keyframes diceTumble1 {
-  0% { transform: rotate(0deg) scale(1) translateY(0); }
-  25% { transform: rotate(90deg) scale(1.1) translateY(-8px); }
-  50% { transform: rotate(180deg) scale(0.95) translateY(4px); }
-  75% { transform: rotate(270deg) scale(1.08) translateY(-6px); }
-  100% { transform: rotate(360deg) scale(1) translateY(0); }
-}
-
-@keyframes diceTumble2 {
-  0% { transform: rotate(0deg) scale(1) translateY(0); }
-  25% { transform: rotate(-90deg) scale(1.08) translateY(-6px); }
-  50% { transform: rotate(-180deg) scale(0.92) translateY(5px); }
-  75% { transform: rotate(-270deg) scale(1.12) translateY(-8px); }
-  100% { transform: rotate(-360deg) scale(1) translateY(0); }
-}
-
-.animate-dice-tumble-1 {
-  animation: diceTumble1 0.28s linear infinite;
-}
-
-.animate-dice-tumble-2 {
-  animation: diceTumble2 0.24s linear infinite;
-}
+/* Scoped custom styling handled inside sub-components */
 </style>

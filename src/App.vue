@@ -190,7 +190,7 @@
           <!-- 底部动作栏：准入与一键入座 -->
           <div class="relative z-10 pt-2 mt-2 border-t border-white/15 flex items-center justify-between">
             <span class="text-[10px] sm:text-[11px] font-mono font-bold text-amber-300">
-              🪙 {{ g.baseStake }} 分
+              🪙 准入 {{ g.baseStake }} 分
             </span>
             <div class="flex items-center">
               <button
@@ -250,18 +250,55 @@
           <button
             type="button"
             @click="openPointsModal"
-            class="px-2 sm:px-2.5 py-1 rounded-xl bg-black/60 border border-amber-500/50 text-amber-300 font-mono font-bold text-xs flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+            class="px-2 sm:px-2.5 py-1 rounded-xl bg-black/60 border border-amber-500/50 text-amber-300 font-mono font-bold text-xs flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer shrink-0"
             title="钱庄账户"
           >
             <span>🪙</span>
             <span class="tabular-nums font-bold">{{ userProfile.coins }}</span>
           </button>
 
+          <!-- Voice Mic & Push-to-Send Button (点击麦克风开始录音，录音时变成点击发送语音，20秒自动发送) -->
+          <div class="relative flex items-center shrink-0">
+            <!-- Idle State Button -->
+            <button
+              v-if="!isRecordingVoice"
+              type="button"
+              @click="startVoiceRecording"
+              class="px-2 sm:px-2.5 py-1 rounded-xl bg-black/60 hover:bg-black/90 border border-amber-500/50 hover:border-amber-400 text-amber-300 text-xs font-bold flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer transition-all shrink-0"
+              title="点击麦克风开始录音 (最长20秒，发送后房间全员收听)"
+            >
+              <span class="text-xs sm:text-sm">🎙️</span>
+              <span class="hidden sm:inline">语音</span>
+            </button>
+
+            <!-- Active Recording State Button (点击发送语音 / 20秒自动发送) -->
+            <div v-else class="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                @click="stopAndSendVoiceRecording"
+                class="px-2.5 sm:px-3 py-1 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-500 border border-red-300 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-red-600/50 animate-pulse active:scale-95 cursor-pointer transition-all whitespace-nowrap"
+                title="点击发送语音，或20秒倒计时结束自动发送"
+              >
+                <span class="w-2 h-2 rounded-full bg-white animate-ping shrink-0"></span>
+                <span>点击发送语音 ({{ 20 - recordingSeconds }}s)</span>
+              </button>
+
+              <button
+                type="button"
+                @click="cancelVoiceRecording"
+                class="w-6 h-6 rounded-lg bg-black/80 hover:bg-black border border-white/20 text-[#D8C7B5] hover:text-white text-[10px] flex items-center justify-center cursor-pointer shrink-0"
+                title="取消录音"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
           <!-- Danmaku Stream Toggle -->
           <button
             type="button"
             @click="danmakuEnabled = !danmakuEnabled"
-            class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl border flex items-center justify-center text-xs transition-all active:scale-95 cursor-pointer"
+            class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl border flex items-center justify-center text-xs transition-all active:scale-95 cursor-pointer shrink-0"
             :class="danmakuEnabled ? 'bg-amber-600/40 text-amber-300 border-amber-500/60' : 'bg-black/60 text-white/50 border-white/15'"
             title="全屏横向弹幕"
           >
@@ -272,7 +309,7 @@
           <button
             type="button"
             @click="toggleSound"
-            class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-black/60 border border-white/15 flex items-center justify-center text-xs text-white/90 active:scale-90 cursor-pointer"
+            class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-black/60 border border-white/15 flex items-center justify-center text-xs text-white/90 active:scale-90 cursor-pointer shrink-0"
             title="静音开关"
           >
             {{ soundOn ? '🔊' : '🔇' }}
@@ -282,24 +319,39 @@
           <button
             type="button"
             @click="toggleFullscreen"
-            class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-black/60 border border-white/15 flex items-center justify-center text-xs text-white/90 active:scale-90 hover:text-white cursor-pointer"
+            class="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-black/60 border border-white/15 flex items-center justify-center text-xs text-white/90 active:scale-90 hover:text-white cursor-pointer shrink-0"
             title="点击切换全屏沉浸对战模式"
           >
             ⛶
           </button>
 
-
           <!-- Toggle Chat & Interactive Props Drawer -->
           <button
             type="button"
             @click="showChatDrawer = !showChatDrawer"
-            class="px-2.5 py-1 text-xs font-bold rounded-xl border transition-all flex items-center gap-1 shadow-md active:scale-95 cursor-pointer"
+            class="px-2.5 py-1 text-xs font-bold rounded-xl border transition-all flex items-center gap-1 shadow-md active:scale-95 cursor-pointer shrink-0"
             :class="showChatDrawer ? 'bg-amber-600 text-white border-amber-400' : 'bg-black/60 text-white border-white/15 hover:bg-black/80'"
             title="展开互动茶室与快捷道具"
           >
             <span>💬</span>
             <span class="hidden sm:inline">互动茶室</span>
           </button>
+        </div>
+      </div>
+
+      <!-- Real-Time Voice Broadcast Floating Banner (房间内所有玩家均可实时收听与展示) -->
+      <div
+        v-if="activePlayingVoice"
+        class="absolute top-12 left-1/2 transform -translate-x-1/2 z-40 px-3.5 sm:px-5 py-1.5 rounded-full bg-black/90 border border-emerald-400/80 shadow-[0_0_30px_rgba(16,185,129,0.5)] backdrop-blur-md flex items-center gap-2 sm:gap-2.5 animate-bounce-subtle pointer-events-none"
+      >
+        <span class="text-emerald-400 text-sm animate-pulse">🔊</span>
+        <span class="text-xs font-black text-amber-300 font-serif-title">{{ activePlayingVoice.sender }}</span>
+        <span class="text-[11px] text-[#E6DEC8]">正在语音广播 ({{ activePlayingVoice.duration }}s)</span>
+        <div class="flex items-center gap-1 h-3.5 pl-1">
+          <span class="w-1 bg-emerald-400 rounded-full h-2 animate-pulse"></span>
+          <span class="w-1 bg-emerald-300 rounded-full h-3.5 animate-pulse"></span>
+          <span class="w-1 bg-emerald-400 rounded-full h-1.5 animate-pulse"></span>
+          <span class="w-1 bg-emerald-300 rounded-full h-3 animate-pulse"></span>
         </div>
       </div>
 
@@ -588,6 +640,18 @@
                   <span>{{ c.text }}</span>
                   <span v-if="c.prop" class="text-base">{{ c.prop }}</span>
                 </div>
+                <!-- Play Voice Audio Button in History -->
+                <div v-if="c.audio" class="mt-1">
+                  <button
+                    type="button"
+                    @click="playVoiceBroadcast(c.audio, c.sender, c.duration)"
+                    class="px-2.5 py-1 rounded-xl bg-emerald-950/70 hover:bg-emerald-900/90 border border-emerald-500/50 text-emerald-300 text-[11px] font-mono flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
+                  >
+                    <span>▶</span>
+                    <span>重播语音 ({{ c.duration || 1 }}s)</span>
+                    <span class="text-[10px] text-emerald-400">🔊</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -855,16 +919,16 @@ const GAME_MODULES: GameModuleInfo[] = [
     id: 'yansan',
     name: '经典烟三',
     icon: '🔥',
-    tagline: '5--10 / 10--20 / 20--40分场 · 四人争锋',
-    badgeText: '5--10至20--40分场',
+    tagline: '5--10 / 10--20 / 20--40分场 · 准入100分',
+    badgeText: '准入100分 · 四人争锋',
     badgeClass: 'bg-red-900/60 text-red-200 border-red-500/50',
-    featurePills: ['四人同台', '方块三首出', '5--10分场'],
+    featurePills: ['四人同台', '方块三首出', '准入100分'],
     tableFelt: '#450A0A',
     tableName: '烟三风云台',
     tableRule: '5--10 / 10--20 / 20--40分场 · 52张全发 · 炽红呢绒',
     tableIcon: '🔥',
-    onlinePlayers: 1890,
-    baseStake: 5,
+    onlinePlayers: 0,
+    baseStake: 100,
     cardBg: 'bg-gradient-to-br from-[#7F1D1D] via-[#450A0A] to-[#1F0404]',
     cardBorder: 'border-red-500/60 hover:border-red-400',
     iconBoxBg: 'bg-red-500/25 text-red-300',
@@ -877,16 +941,16 @@ const GAME_MODULES: GameModuleInfo[] = [
     id: 'shisanshui',
     name: '十三张',
     icon: '💎',
-    tagline: '头中尾三道 · 智能理牌',
-    badgeText: '深海幻蓝 · 严防倒水',
+    tagline: '头中尾三道 · 智能理牌 · 准入100分',
+    badgeText: '深海幻蓝 · 准入100分',
     badgeClass: 'bg-blue-900/60 text-blue-200 border-blue-500/50',
-    featurePills: ['一键智能推荐', '倒水实时预警', '全垒打打枪翻倍'],
+    featurePills: ['一键智能推荐', '倒水实时预警', '准入100分'],
     tableFelt: '#172554',
     tableName: '深海幻蓝台',
     tableRule: '头3张/中5张/尾5张 · 幽蓝呢绒',
     tableIcon: '🌊',
-    onlinePlayers: 1450,
-    baseStake: 300,
+    onlinePlayers: 0,
+    baseStake: 100,
     cardBg: 'bg-gradient-to-br from-[#1E3A8A] via-[#172554] to-[#0B1224]',
     cardBorder: 'border-blue-500/60 hover:border-blue-400',
     iconBoxBg: 'bg-blue-500/25 text-blue-300',
@@ -899,16 +963,16 @@ const GAME_MODULES: GameModuleInfo[] = [
     id: 'mahjong',
     name: '经典麻将',
     icon: '🀄',
-    tagline: '东风圈 · 碰杠听胡',
-    badgeText: '幻彩紫晶 · 自摸大胡',
+    tagline: '东风圈 · 碰杠听胡 · 准入100分',
+    badgeText: '幻彩紫晶 · 准入100分',
     badgeClass: 'bg-purple-900/60 text-purple-200 border-purple-500/50',
-    featurePills: ['听牌智能推算', '牌墙余张透视', '万条筒字吃碰杠'],
+    featurePills: ['听牌智能推算', '牌墙余张透视', '准入100分'],
     tableFelt: '#3B0764',
     tableName: '幻彩紫晶池',
     tableRule: '136张经典牌库 · 东风圈 · 紫金呢绒',
     tableIcon: '🀄',
-    onlinePlayers: 2650,
-    baseStake: 200,
+    onlinePlayers: 0,
+    baseStake: 100,
     cardBg: 'bg-gradient-to-br from-[#581C87] via-[#3B0764] to-[#1A032C]',
     cardBorder: 'border-purple-500/60 hover:border-purple-400',
     iconBoxBg: 'bg-purple-500/25 text-purple-300',
@@ -927,15 +991,55 @@ const GAME_SVG_IMAGES: Record<GameType, string[]> = {
 
 const currentSvgIndex = ref(0);
 let svgTimer: number | null = null;
+let presenceInterval: any = null;
+
+function updateRealPresence(data: { yansan?: number; shisanshui?: number; mahjong?: number }) {
+  if (!data) return;
+  const yansanMod = GAME_MODULES.find(g => g.id === 'yansan');
+  const shisanshuiMod = GAME_MODULES.find(g => g.id === 'shisanshui');
+  const mahjongMod = GAME_MODULES.find(g => g.id === 'mahjong');
+  if (yansanMod && typeof data.yansan === 'number') yansanMod.onlinePlayers = Math.max(0, data.yansan);
+  if (shisanshuiMod && typeof data.shisanshui === 'number') shisanshuiMod.onlinePlayers = Math.max(0, data.shisanshui);
+  if (mahjongMod && typeof data.mahjong === 'number') mahjongMod.onlinePlayers = Math.max(0, data.mahjong);
+}
+
+async function fetchRealPresence() {
+  try {
+    const res = await fetch('/api/presence');
+    const data = await res.json();
+    if (data && data.success) {
+      updateRealPresence(data);
+    }
+  } catch {}
+}
 
 onMounted(() => {
   svgTimer = window.setInterval(() => {
     currentSvgIndex.value = (currentSvgIndex.value + 1) % 100;
   }, 2200);
+
+  // Immediately query real connected player presence
+  fetchRealPresence();
+
+  // Periodically refresh real connected player presence without inflation
+  presenceInterval = window.setInterval(fetchRealPresence, 3000);
 });
 
 onBeforeUnmount(() => {
   if (svgTimer) clearInterval(svgTimer);
+  if (presenceInterval) clearInterval(presenceInterval);
+  if (recordingInterval) clearInterval(recordingInterval);
+  if (voiceStream) {
+    try {
+      voiceStream.getTracks().forEach((track: any) => track.stop());
+    } catch {}
+  }
+  if (activePlayingAudio) {
+    try {
+      activePlayingAudio.pause();
+      activePlayingAudio = null;
+    } catch {}
+  }
 });
 
 const getGameSvg = (id: GameType) => {
@@ -1121,12 +1225,10 @@ const currentSceneMaxPlayers = computed(() => {
 const currentSceneBaseStake = computed(() => {
   if (activeGameType.value === 'mahjong') return 100;
   if (activeGameType.value === 'shisanshui') {
-    return (activeShisanshuiScene.value === 'eight-realtime' || activeShisanshuiScene.value === 'eight-booking') ? 500 : 200;
+    return (activeShisanshuiScene.value === 'eight-realtime' || activeShisanshuiScene.value === 'eight-booking') ? 500 : 100;
   }
   if (activeGameType.value === 'yansan') {
-    if (activeYansanScene.value === 'yansan-20-40') return 40;
-    if (activeYansanScene.value === 'yansan-10-20') return 20;
-    return 10;
+    return 100;
   }
   return 100;
 });
@@ -1249,6 +1351,16 @@ const floatingProps = reactive<{ id: string; sender: string; icon: string; x: nu
 const activeSpeechBubble = ref('');
 let speechTimer: any = null;
 
+// Real-Time Table Voice Recording & Broadcast State (20s limit / auto-broadcast to all players)
+const isRecordingVoice = ref(false);
+const recordingSeconds = ref(0);
+const activePlayingVoice = ref<{ sender: string; duration: number } | null>(null);
+let voiceRecorder: any = null;
+let voiceStream: any = null;
+let voiceChunks: Blob[] = [];
+let recordingInterval: any = null;
+let activePlayingAudio: HTMLAudioElement | null = null;
+
 const newRoomTitle = ref('');
 const newRoomGame = ref<GameType>('yansan');
 
@@ -1300,6 +1412,11 @@ function enterGame(gt: GameType) {
     soundFX.playTap();
     return;
   }
+  // 所有游戏均需 100 积分准入
+  if (userProfile.coins < 100) {
+    promptInsufficientCoins(gt, 'default', 100);
+    return;
+  }
   if (gt === 'mahjong') {
     currentView.value = 'mahjong-scenes';
     soundFX.playTap();
@@ -1319,6 +1436,7 @@ function enterGame(gt: GameType) {
   currentTheme.value = getGameTheme(gt);
   currentWaitingRoomPlayers.value = [];
   currentView.value = 'waiting-room';
+  notifyPresence(gt);
   soundFX.playTap();
 }
 
@@ -1326,12 +1444,10 @@ function getSceneRequiredCoins(gt: GameType, sceneMode: string): number {
   if (gt === 'mahjong') return 100;
   if (gt === 'shisanshui') {
     if (sceneMode === 'eight-realtime' || sceneMode === 'eight-booking') return 500;
-    return 200;
+    return 100;
   }
   if (gt === 'yansan') {
-    if (sceneMode === 'yansan-20-40') return 40;
-    if (sceneMode === 'yansan-10-20') return 20;
-    return 10;
+    return 100;
   }
   return 100;
 }
@@ -1444,6 +1560,7 @@ function onSelectMahjongScene(mode: MahjongSceneMode) {
   showChatDrawer.value = false;
   currentWaitingRoomPlayers.value = [];
   currentView.value = 'waiting-room';
+  notifyPresence('mahjong', mode);
   soundFX.playTap();
 }
 
@@ -1466,6 +1583,7 @@ function onSelectShisanshuiScene(mode: ShisanshuiSceneMode) {
   showChatDrawer.value = false;
   currentWaitingRoomPlayers.value = [];
   currentView.value = 'waiting-room';
+  notifyPresence('shisanshui', mode);
   soundFX.playTap();
 }
 
@@ -1488,6 +1606,7 @@ function onSelectYansanScene(mode: YansanSceneMode) {
   showChatDrawer.value = false;
   currentWaitingRoomPlayers.value = [];
   currentView.value = 'waiting-room';
+  notifyPresence('yansan', mode);
   soundFX.playTap();
 }
 
@@ -1554,11 +1673,28 @@ function toggleFullscreen() {
   } catch {}
 }
 
+function notifyPresence(gt: GameType | 'lobby', mode?: string) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'presence_update',
+          gameType: gt,
+          sceneMode: mode,
+          playerId: userProfile.id,
+          playerName: userProfile.name,
+        })
+      );
+    } catch {}
+  }
+}
+
 function returnToLobby() {
   currentView.value = 'lobby';
   showChatDrawer.value = false;
   isPracticeMode.value = false;
   currentWaitingRoomPlayers.value = [];
+  notifyPresence('lobby');
   soundFX.playTap();
 }
 
@@ -1594,6 +1730,16 @@ function connectWs() {
 
       if (msg.type === 'lobby_snapshot') {
         rooms.value = msg.rooms || [];
+        if (msg.counts) {
+          updateRealPresence(msg.counts);
+        }
+      } else if (msg.type === 'presence_counts') {
+        if (msg.counts) {
+          updateRealPresence(msg.counts);
+        }
+      } else if (msg.type === 'scene_join_rejected') {
+        promptInsufficientCoins(activeGameType.value, activeSceneMode.value, msg.requiredCoins || 100);
+        returnToLobby();
       } else if (msg.type === 'room_created') {
         rooms.value = msg.rooms || [];
         activeRoomId.value = msg.room.id;
@@ -1619,7 +1765,9 @@ function connectWs() {
         if (activeRoom.value) {
           activeRoom.value.chat.push(msg.message);
         }
-        if (msg.message.voice && msg.message.text) {
+        if (msg.message.audio) {
+          playVoiceBroadcast(msg.message.audio, msg.message.sender, msg.message.duration || 1);
+        } else if (msg.message.voice && msg.message.text) {
           soundFX.speakVoice(msg.message.text);
         }
         if (msg.message.prop) {
@@ -1819,6 +1967,170 @@ function sendEmojiSticker(em: string) {
   soundFX.playTap();
   addDanmaku(userProfile.name, userProfile.avatar, em, em);
   triggerSpeechBubble(`${userProfile.name}: ${em}`);
+}
+
+// ==========================================
+// Table Top Banner Voice Recording & Broadcast Engine
+// ==========================================
+async function startVoiceRecording() {
+  if (isRecordingVoice.value) return;
+  try {
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      triggerSpeechBubble('⚠️ 当前浏览器环境不支持麦克风语音录制');
+      return;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceStream = stream;
+
+    let mimeType = '';
+    if (typeof MediaRecorder !== 'undefined') {
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/webm';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg';
+      }
+    }
+
+    voiceRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    voiceChunks = [];
+    voiceRecorder.ondataavailable = (e: any) => {
+      if (e.data && e.data.size > 0) {
+        voiceChunks.push(e.data);
+      }
+    };
+
+    voiceRecorder.start(250);
+    isRecordingVoice.value = true;
+    recordingSeconds.value = 0;
+    soundFX.playTap();
+    triggerSpeechBubble('🎙️ 正在录音... 最长20秒后自动发送');
+
+    if (recordingInterval) clearInterval(recordingInterval);
+    recordingInterval = window.setInterval(() => {
+      recordingSeconds.value += 1;
+      if (recordingSeconds.value >= 20) {
+        // 录音20秒未点击发送语音，自动发送！
+        stopAndSendVoiceRecording();
+      }
+    }, 1000);
+  } catch (err: any) {
+    console.warn('Microphone access denied:', err);
+    triggerSpeechBubble('⚠️ 麦克风无法访问，请在浏览器权限设置中允许麦克风权限');
+    soundFX.playTap();
+  }
+}
+
+function stopAndSendVoiceRecording() {
+  if (!isRecordingVoice.value || !voiceRecorder) return;
+  if (recordingInterval) {
+    clearInterval(recordingInterval);
+    recordingInterval = null;
+  }
+  const duration = Math.max(1, recordingSeconds.value);
+  isRecordingVoice.value = false;
+  recordingSeconds.value = 0;
+
+  voiceRecorder.onstop = () => {
+    try {
+      if (voiceStream) {
+        voiceStream.getTracks().forEach((track: any) => track.stop());
+        voiceStream = null;
+      }
+      if (voiceChunks.length === 0) return;
+      const mime = voiceRecorder?.mimeType || 'audio/webm';
+      const audioBlob = new Blob(voiceChunks, { type: mime });
+      voiceChunks = [];
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Data = reader.result as string;
+        sendVoiceBroadcastMessage(base64Data, duration);
+      };
+      reader.readAsDataURL(audioBlob);
+    } catch {}
+    voiceRecorder = null;
+  };
+
+  try {
+    voiceRecorder.stop();
+  } catch {}
+  soundFX.playTap();
+}
+
+function cancelVoiceRecording() {
+  if (recordingInterval) {
+    clearInterval(recordingInterval);
+    recordingInterval = null;
+  }
+  isRecordingVoice.value = false;
+  recordingSeconds.value = 0;
+  if (voiceRecorder) {
+    try {
+      voiceRecorder.stop();
+    } catch {}
+    voiceRecorder = null;
+  }
+  if (voiceStream) {
+    try {
+      voiceStream.getTracks().forEach((track: any) => track.stop());
+    } catch {}
+    voiceStream = null;
+  }
+  voiceChunks = [];
+  triggerSpeechBubble('已取消本次录音');
+  soundFX.playTap();
+}
+
+function sendVoiceBroadcastMessage(audioDataUrl: string, duration: number) {
+  const roomId = activeRoomId.value || 'RM-202';
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(
+      JSON.stringify({
+        type: 'game_chat',
+        roomId,
+        sender: userProfile.name || '牌友',
+        avatar: userProfile.avatar || '👤',
+        text: `🎤 [牌桌实时语音 ${duration}s]`,
+        voice: true,
+        audio: audioDataUrl,
+        duration,
+      })
+    );
+    addPacketLog('OUT', `VOICE_MSG: ${duration}s`);
+  }
+  triggerSpeechBubble(`🎙️ 语音已发送 (${duration}秒)，房间内全员收听`);
+}
+
+function playVoiceBroadcast(audioUrl: string, sender: string, duration = 2) {
+  try {
+    if (activePlayingAudio) {
+      try {
+        activePlayingAudio.pause();
+      } catch {}
+      activePlayingAudio = null;
+    }
+    const audio = new Audio(audioUrl);
+    activePlayingAudio = audio;
+    activePlayingVoice.value = {
+      sender,
+      duration: Math.max(1, duration),
+    };
+    audio.onended = () => {
+      activePlayingVoice.value = null;
+      activePlayingAudio = null;
+    };
+    audio.onerror = () => {
+      activePlayingVoice.value = null;
+      activePlayingAudio = null;
+    };
+    audio.play().catch((err) => {
+      console.warn('Voice auto-play policy:', err);
+    });
+  } catch {}
 }
 
 function sendProp(prop: { name: string; icon: string; impactIcon?: string }) {

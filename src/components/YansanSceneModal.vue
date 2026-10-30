@@ -18,11 +18,11 @@
               <span>🔥 经典烟三 · 玩法分场选择</span>
             </h2>
             <span class="text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-mono font-bold">
-              5--10 · 10--20 · 20--40分场
+              5--10 · 10--20 · 20--40分场 · 准入100分
             </span>
           </div>
           <p class="text-[10px] sm:text-xs text-[#E2B3B3] font-mono mt-0.5">
-            严禁人机补位 · 选择分场后进入专属等候室 · 满四人全员入座后自动发牌开局
+            严禁人机补位 · 准入门槛100分 · 选择分场后进入专属等候室 · 满四人全员入座后自动发牌开局
           </p>
         </div>
       </div>
@@ -106,9 +106,10 @@
 
         <!-- Bottom Action Bar -->
         <div class="pt-3 border-t border-white/10 flex items-center justify-between">
-          <span class="text-[10px] sm:text-xs text-[#E2B3B3] font-mono">
-            👥 4人真人席位
-          </span>
+          <div class="flex flex-col">
+            <span class="text-[9px] text-[#A89887] font-mono">准入门槛</span>
+            <span class="text-xs sm:text-sm font-mono font-black text-amber-300">🪙 100 分</span>
+          </div>
           <button
             type="button"
             @click.stop="confirmAndEnter(s.id)"
@@ -129,7 +130,7 @@
     <div class="flex items-center justify-between pt-2 border-t border-[#3D1414] shrink-0">
       <div class="text-[10px] sm:text-xs text-[#E2B3B3] flex items-center gap-2 font-mono">
         <span class="text-amber-400 font-bold">💡 提示：</span>
-        <span>已恢复经典的 5--10分、10--20分、20--40分场。选择后进入该分场等候室，等待牌友加入相同分场，满四人自动发牌开局。</span>
+        <span>已恢复经典的 5--10分、10--20分、20--40分场，所有分场均需 100 积分准入。选择后进入该分场等候室，等待牌友加入相同分场，满四人自动发牌开局。</span>
       </div>
       <div class="flex items-center gap-3">
         <button
@@ -178,30 +179,30 @@ const SCENES: SceneItem[] = [
     name: '5--10 分场',
     badge: '底分5分 · 顶格10分',
     icon: '🔥',
-    baseStake: 5,
+    baseStake: 100,
     stakeLabel: '5--10 分',
-    ruleSummary: '方块三首出 · 四人各13张 · 底分5分 · 封顶10分',
-    specialHighlight: '经典入门体验 · 顺子连环跑牌 · 输赢5至10分',
+    ruleSummary: '方块三首出 · 四人各13张 · 底分5分 · 准入100分',
+    specialHighlight: '经典入门体验 · 顺子连环跑牌 · 准入100分',
   },
   {
     id: 'yansan-10-20',
     name: '10--20 分场',
     badge: '底分10分 · 顶格20分',
     icon: '⚡',
-    baseStake: 10,
+    baseStake: 100,
     stakeLabel: '10--20 分',
-    ruleSummary: '四人同台争锋 · 炸弹翻倍 · 底分10分 · 封顶20分',
-    specialHighlight: '进阶实力对决 · 炸弹顶大出清 · 输赢10至20分',
+    ruleSummary: '四人同台争锋 · 炸弹翻倍 · 底分10分 · 准入100分',
+    specialHighlight: '进阶实力对决 · 炸弹顶大出清 · 准入100分',
   },
   {
     id: 'yansan-20-40',
     name: '20--40 分场',
     badge: '底分20分 · 顶格40分',
     icon: '👑',
-    baseStake: 20,
+    baseStake: 100,
     stakeLabel: '20--40 分',
-    ruleSummary: '四人巅峰豪客对决 · 炸弹翻番 · 底分20分 · 封顶40分',
-    specialHighlight: '高倍巅峰争霸 · 决战云巅先跑赢 · 输赢20至40分',
+    ruleSummary: '四人巅峰豪客对决 · 炸弹翻番 · 底分20分 · 准入100分',
+    specialHighlight: '高倍巅峰争霸 · 决战云巅先跑赢 · 准入100分',
   },
 ];
 
