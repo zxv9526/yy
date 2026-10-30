@@ -48,22 +48,41 @@
           <span>换场</span>
         </button>
 
-        <!-- Game & Scene Title Tag -->
-        <div class="flex items-center gap-2 ml-1">
-          <span class="text-xl sm:text-2xl filter drop-shadow">{{ gameIcon }}</span>
-          <div>
-            <div class="flex items-center gap-1.5 sm:gap-2">
-              <h2 class="text-xs sm:text-sm md:text-base font-black text-white font-serif-title drop-shadow truncate">
-                {{ gameName }} · {{ sceneDisplayName }}
-              </h2>
-              <span class="px-2 py-0.2 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 text-[9px] sm:text-[10px] font-mono font-bold whitespace-nowrap">
-                🛡️ 纯真人对弈
-              </span>
+        <!-- Game & Scene Title Tag / Voice Broadcast (左上角展示；语音播放中时暂时遮挡场景名称，播放结束后自动恢复，绝不遮挡中央牌桌与牌型) -->
+        <div class="flex items-center ml-1 min-h-[36px]">
+          <!-- Normal Scene Display (when no voice is currently playing) -->
+          <div v-if="!activePlayingVoice" class="flex items-center gap-2 transition-all">
+            <span class="text-xl sm:text-2xl filter drop-shadow">{{ gameIcon }}</span>
+            <div>
+              <div class="flex items-center gap-1.5 sm:gap-2">
+                <h2 class="text-xs sm:text-sm md:text-base font-black text-white font-serif-title drop-shadow truncate">
+                  {{ gameName }} · {{ sceneDisplayName }}
+                </h2>
+                <span class="px-2 py-0.2 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 text-[9px] sm:text-[10px] font-mono font-bold whitespace-nowrap">
+                  🛡️ 纯真人对弈
+                </span>
+              </div>
+              <div class="text-[9px] sm:text-[10px] text-amber-200/80 font-mono flex items-center gap-1.5 sm:gap-2">
+                <span>🪙 {{ gameType === 'yansan' ? '准入: 100 分' : `底分准入: ${baseStake} 分` }}</span>
+                <span>•</span>
+                <span>满座 {{ maxPlayers }} 人自动开局</span>
+              </div>
             </div>
-            <div class="text-[9px] sm:text-[10px] text-amber-200/80 font-mono flex items-center gap-1.5 sm:gap-2">
-              <span>🪙 {{ gameType === 'yansan' ? '准入: 100 分' : `底分准入: ${baseStake} 分` }}</span>
-              <span>•</span>
-              <span>满座 {{ maxPlayers }} 人自动开局</span>
+          </div>
+
+          <!-- Real-Time Voice Broadcast Banner (显示在左上角暂时遮挡游戏场景名称，播放完毕后自动恢复，避免遮挡牌桌牌面) -->
+          <div
+            v-else
+            class="flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-emerald-950/95 via-black/95 to-emerald-950/95 border-2 border-emerald-400 shadow-[0_0_25px_rgba(16,185,129,0.7)] backdrop-blur-md animate-pulse z-40"
+          >
+            <span class="text-emerald-400 text-sm animate-bounce">🔊</span>
+            <span class="text-xs sm:text-sm font-black text-amber-300 font-serif-title truncate max-w-[100px] sm:max-w-[150px]">{{ activePlayingVoice.sender }}</span>
+            <span class="text-[11px] sm:text-xs text-[#E6DEC8] whitespace-nowrap">语音广播中 ({{ activePlayingVoice.duration }}s)</span>
+            <div class="flex items-center gap-0.5 h-3 pl-1">
+              <span class="w-1 bg-emerald-400 rounded-full h-2 animate-pulse"></span>
+              <span class="w-1 bg-emerald-300 rounded-full h-3 animate-pulse"></span>
+              <span class="w-1 bg-emerald-400 rounded-full h-1.5 animate-pulse"></span>
+              <span class="w-1 bg-emerald-300 rounded-full h-2.5 animate-pulse"></span>
             </div>
           </div>
         </div>
@@ -124,22 +143,6 @@
         </div>
       </div>
     </header>
-
-    <!-- Real-Time Voice Broadcast Floating Banner in Waiting Room -->
-    <div
-      v-if="activePlayingVoice"
-      class="absolute top-12 left-1/2 transform -translate-x-1/2 z-40 px-3.5 sm:px-5 py-1.5 rounded-full bg-black/90 border border-emerald-400/80 shadow-[0_0_30px_rgba(16,185,129,0.5)] backdrop-blur-md flex items-center gap-2 sm:gap-2.5 animate-bounce-subtle pointer-events-none"
-    >
-      <span class="text-emerald-400 text-sm animate-pulse">🔊</span>
-      <span class="text-xs font-black text-amber-300 font-serif-title">{{ activePlayingVoice.sender }}</span>
-      <span class="text-[11px] text-[#E6DEC8]">正在语音广播 ({{ activePlayingVoice.duration }}s)</span>
-      <div class="flex items-center gap-1 h-3.5 pl-1">
-        <span class="w-1 bg-emerald-400 rounded-full h-2 animate-pulse"></span>
-        <span class="w-1 bg-emerald-300 rounded-full h-3.5 animate-pulse"></span>
-        <span class="w-1 bg-emerald-400 rounded-full h-1.5 animate-pulse"></span>
-        <span class="w-1 bg-emerald-300 rounded-full h-3 animate-pulse"></span>
-      </div>
-    </div>
 
     <!-- ======================================================== -->
     <!-- CENTER TABLE STAGE: WAITING SEATS DISPLAY                 -->
@@ -413,6 +416,7 @@ const recordingSeconds = ref(0);
 const activePlayingVoice = ref<{ sender: string; duration: number } | null>(null);
 let voiceRecorder: MediaRecorder | null = null;
 let voiceStream: MediaStream | null = null;
+let recordingAudioCtx: any = null;
 let voiceChunks: Blob[] = [];
 let recordingInterval: any = null;
 let activePlayingAudio: HTMLAudioElement | null = null;
@@ -605,8 +609,45 @@ function joinSceneQueue() {
 async function startVoiceRecording() {
   if (isRecordingVoice.value) return;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // 启用硬件级自动增益 (AGC)、回声消除及降噪，显著提升拾音灵敏度
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     voiceStream = stream;
+
+    // Web Audio API 前级放大 + 动态压缩：增强人声响度 3.5 倍，同时防止近麦爆音
+    let recordStream: MediaStream = stream;
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        const actx = new AudioContextClass();
+        recordingAudioCtx = actx;
+        const sourceNode = actx.createMediaStreamSource(stream);
+        const gainNode = actx.createGain();
+        gainNode.gain.value = 3.5; // 350% 录音增益放大
+
+        const compressor = actx.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(-24, actx.currentTime);
+        compressor.knee.setValueAtTime(30, actx.currentTime);
+        compressor.ratio.setValueAtTime(12, actx.currentTime);
+        compressor.attack.setValueAtTime(0.003, actx.currentTime);
+        compressor.release.setValueAtTime(0.25, actx.currentTime);
+
+        sourceNode.connect(gainNode);
+        gainNode.connect(compressor);
+
+        const destNode = actx.createMediaStreamDestination();
+        compressor.connect(destNode);
+        recordStream = destNode.stream;
+      }
+    } catch (e) {
+      console.warn('AudioContext recording boost fallback:', e);
+      recordStream = stream;
+    }
 
     let mimeType = '';
     if (typeof MediaRecorder !== 'undefined') {
@@ -621,7 +662,7 @@ async function startVoiceRecording() {
       }
     }
 
-    voiceRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    voiceRecorder = mimeType ? new MediaRecorder(recordStream, { mimeType }) : new MediaRecorder(recordStream);
     voiceChunks = [];
     voiceRecorder.ondataavailable = (e: any) => {
       if (e.data && e.data.size > 0) {
@@ -665,6 +706,12 @@ function stopAndSendVoiceRecording() {
         voiceStream.getTracks().forEach((track: any) => track.stop());
         voiceStream = null;
       }
+      if (recordingAudioCtx) {
+        try {
+          recordingAudioCtx.close();
+        } catch {}
+        recordingAudioCtx = null;
+      }
       if (voiceChunks.length === 0) return;
       const mime = voiceRecorder?.mimeType || 'audio/webm';
       const audioBlob = new Blob(voiceChunks, { type: mime });
@@ -705,6 +752,12 @@ function cancelVoiceRecording() {
     } catch {}
     voiceStream = null;
   }
+  if (recordingAudioCtx) {
+    try {
+      recordingAudioCtx.close();
+    } catch {}
+    recordingAudioCtx = null;
+  }
   voiceChunks = [];
   lastGreetingText.value = '已取消本次录音';
   soundFX.playTap();
@@ -739,11 +792,31 @@ function playVoiceBroadcast(audioUrl: string, sender: string, duration = 2) {
       activePlayingAudio = null;
     }
     const audio = new Audio(audioUrl);
+    audio.volume = 1.0;
     activePlayingAudio = audio;
     activePlayingVoice.value = {
       sender,
       duration: Math.max(1, duration),
     };
+
+    // 播放端使用 Web Audio API 提供二次响度提升 (2.5倍)，确保外放与小耳机清晰大声
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        const playCtx = new AudioContextClass();
+        if (playCtx.state === 'suspended') {
+          playCtx.resume();
+        }
+        const source = playCtx.createMediaElementSource(audio);
+        const gainNode = playCtx.createGain();
+        gainNode.gain.value = 2.5; // 250% 播放端响度增强
+        source.connect(gainNode);
+        gainNode.connect(playCtx.destination);
+      }
+    } catch (e) {
+      console.warn('Playback WebAudio gain boost fallback to native audio:', e);
+    }
+
     audio.onended = () => {
       activePlayingVoice.value = null;
       activePlayingAudio = null;
@@ -815,6 +888,12 @@ onBeforeUnmount(() => {
     try {
       voiceStream.getTracks().forEach((track: any) => track.stop());
     } catch {}
+  }
+  if (recordingAudioCtx) {
+    try {
+      recordingAudioCtx.close();
+    } catch {}
+    recordingAudioCtx = null;
   }
   if (activePlayingAudio) {
     try {
