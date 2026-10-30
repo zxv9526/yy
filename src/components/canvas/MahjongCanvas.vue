@@ -277,16 +277,11 @@
               </div>
             </div>
 
-            <!-- Hand Tiles Single Horizontal Row (Flat display, no wrapping) -->
+            <!-- Hand Tiles Single Horizontal Row (Flat display, no wrapping, pure Mahjong tile image style without text labels) -->
             <div class="flex items-center justify-start sm:justify-center gap-1 sm:gap-1.5 flex-nowrap w-full py-0.5 overflow-x-auto max-w-full">
               <template v-for="(tile, tIdx) in ((winningBreakdown.winnerSeat ?? 0) === 0 ? myHand : (oppHands[(winningBreakdown.winnerSeat ?? 1) - 1] || []))" :key="tile.id || tIdx">
-                <div class="relative h-[50px] sm:h-[65px] w-[30px] sm:w-[40px] shrink-0 rounded-xl bg-gradient-to-b from-[#FFFDF7] via-[#FFF3D6] to-[#FFE394] border border-amber-400 shadow-md flex flex-col items-center justify-between p-0.5">
-                  <div class="w-full flex-1 flex items-center justify-center">
-                    <img :src="getMahjongImagePath(tile)" :alt="tile.text" class="w-full h-full object-contain drop-shadow" />
-                  </div>
-                  <div class="text-[7px] sm:text-[9px] font-black text-amber-950 font-serif-title truncate">
-                    {{ tile.text }}
-                  </div>
+                <div class="relative h-[52px] sm:h-[68px] w-[32px] sm:w-[42px] shrink-0 rounded-xl bg-gradient-to-b from-[#FFFDF7] via-[#FFF3D6] to-[#FFE394] border border-amber-400 shadow-md flex items-center justify-center p-1">
+                  <img :src="getMahjongImagePath(tile)" :alt="tile.text" class="w-full h-full object-contain drop-shadow" />
                 </div>
               </template>
             </div>
@@ -342,21 +337,13 @@
                   </div>
 
                   <!-- Authentic SVG Mahjong Image -->
-                  <div class="w-full flex-1 flex items-center justify-center min-h-0 pt-0.5">
+                  <div class="w-full flex-1 flex items-center justify-center min-h-0 py-1">
                     <img
                       :src="getMahjongImagePath(winningBreakdown.rewardMaTiles[idx])"
                       :alt="winningBreakdown.rewardMaTiles[idx]?.text"
-                      class="w-full h-full max-h-[36px] sm:max-h-[52px] object-contain drop-shadow pointer-events-none transition-transform"
-                      :class="isYiWuJiuMa(winningBreakdown.rewardMaTiles[idx]) ? 'scale-110 drop-shadow-[0_2px_8px_rgba(245,158,11,0.5)]' : 'opacity-80'"
+                      class="w-full h-full max-h-[42px] sm:max-h-[64px] object-contain drop-shadow pointer-events-none transition-transform"
+                      :class="isYiWuJiuMa(winningBreakdown.rewardMaTiles[idx]) ? 'scale-110 drop-shadow-[0_2px_8px_rgba(245,158,11,0.6)]' : 'opacity-85'"
                     />
-                  </div>
-
-                  <!-- Tile Name (Bold, Clear) -->
-                  <div
-                    class="text-[8px] sm:text-[11px] md:text-xs font-black font-serif-title leading-tight truncate mt-0.5"
-                    :class="isYiWuJiuMa(winningBreakdown.rewardMaTiles[idx]) ? 'text-amber-950 font-black' : 'text-gray-700'"
-                  >
-                    {{ winningBreakdown.rewardMaTiles[idx]?.text }}
                   </div>
                 </div>
 
